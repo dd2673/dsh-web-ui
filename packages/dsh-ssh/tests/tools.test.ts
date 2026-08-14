@@ -82,6 +82,7 @@ const host: SshHostSummary = {
   user: 'root',
   auth: 'key',
   keyReady: true,
+  hostKeySha256: 'SHA256:test-fingerprint',
   proxyJump: [],
   description: 'web',
   environment: 'production',
@@ -104,12 +105,16 @@ describe('tool factories (defineTool DSL regression)', () => {
 })
 
 describe('ssh_list', () => {
-  it('returns hosts and renders a table', async () => {
+  it('declares every returned host field and renders a table', async () => {
     const stub = new StubEngine()
     stub.hosts = [host]
     const tool = sshListTool(engine(stub))
     const result = await run(tool, {})
     expect((result.hosts as SshHostSummary[])).toEqual([host])
+    const schema = tool.output.schema as {
+      properties: { hosts: { items: { properties: Record<string, unknown> } } }
+    }
+    expect(schema.properties.hosts.items.properties).toHaveProperty('hostKeySha256')
     const text = render(tool, result)
     expect(text).toContain('web-01')
     expect(text).toContain('10.0.0.1')

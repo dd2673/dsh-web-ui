@@ -85,6 +85,7 @@ export function sshListTool(engine: SshEngine) {
                 user: { type: 'string', required: true },
                 auth: { type: 'string', enum: ['key', 'password'], required: true },
                 keyReady: { type: 'boolean', required: true },
+                hostKeySha256: { type: 'string' },
                 proxyJump: { type: 'array', items: { type: 'string' }, required: true },
                 description: { type: 'string' },
                 environment: { type: 'string' },
