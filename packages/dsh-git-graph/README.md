@@ -1,6 +1,6 @@
 # dsh-wending-git-workbench
 
-外部 dsh Web GUI 插件：在官方输入工具栏提供分支入口，并打开 Codex 风格 Git 工作台。工作台覆盖更改列表、文本 diff、暂存/取消暂存、提交、`fetch`、`pull --ff-only`、`push`、分支切换与提交图谱。所有 Git 操作仅能作用于 DSH 已注册工作区，参数通过 argv 数组执行，不修改 Harness 源码。
+外部 dsh Web GUI 插件：在官方输入选择器行提供分支入口，并打开 Codex 风格 Git 工作台。工作台覆盖更改列表、文本 diff、暂存/取消暂存、提交、`fetch`、`pull --ff-only`、`push`、分支切换与提交图谱。入口优先挂在 `conversation.input.selector.context`；若运行 shell 未声明该槽位，等待 `CONTEXT_FALLBACK_MS` 后回退到 `conversation.input.dock`。所有 Git 操作仅能作用于 DSH 已注册工作区，参数通过 argv 数组执行，不修改 Harness 源码。
 
 行为对齐 ZCode 的 `GitBranchSwitcher`：可搜索弹层、当前项打勾、「创建并检出新分支… / Git 图谱」底部操作、切换守卫（未解决冲突 / 进行中操作 / 目标分支被其他 worktree 检出）与可读报错。
 
@@ -55,7 +55,7 @@ dsh plugin --profile <profile> remove dsh-wending-git-workbench
 - 边界与加载链调研、关键决策见 [docs/ADR-001-plugin-boundary.md](docs/ADR-001-plugin-boundary.md)。
 - host half 的 `/git/*` 只接受已注册 workspace 的路径（realpath 校验），浏览器无法对任意目录执行 git。
 - 切换语义是工作区级：`git switch --no-guess <branch>` 作用于 repoRoot 磁盘树，影响该工作区所有会话；项目切换 = 激活目标工作区并打开其（复用或新建的）空白会话，不给既有会话换 cwd。
-- 挂载 seam：`conversation.input.left`（官方声明的 session list 槽位）——位于输入框工具栏；无活动会话、无 workspace cwd 或非 Git 工作区时分支按钮隐藏。
+- 挂载 seam：`conversation.input.selector.context`（官方声明的 session-maybe list 槽位）——输入选择器行的 context 洞，与官方工作区胶囊并排；hero（空白会话）与 active 会话相位都有分支胶囊；无会话 cwd 或非 git 工作区时分支 chip 自行隐藏。声明感知 + 回退：等待该槽位声明 `CONTEXT_FALLBACK_MS`（npm SDK rc.6 的 shell 已删除此声明），超时未声明则改挂 `conversation.input.dock`（session 相位才挂载，hero 无座位——rc.6 上接受的降级）；只挂一个座位，回退后迟到的 context 声明被忽略。
 - 工作区选择不在此插件内：官方工作区胶囊（`conversation.input.selector.workspace`）是唯一入口，本插件只提供 git 分支上下文。
 - 分支状态刷新：挂载/弹层打开/切换成功后拉取 + host SSE（`/git/events`，订阅期间每 2s 轮询 workspace 状态）推送外部变更 + window focus 刷新。
 
