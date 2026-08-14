@@ -108,6 +108,11 @@ export class TestSshServer {
     let connectCount = 0
     const server = new Server({ hostKeys: [readFileSync(hostKey)] }, (client) => {
       clients.push(client)
+      // Host-key discovery deliberately aborts during key exchange before
+      // authentication. ssh2 reports that expected probe as a connection
+      // error on the server side; keep it from becoming an unhandled test
+      // process exception.
+      client.on('error', () => undefined)
       client.on('authentication', (ctx) => {
         if (ctx.method === 'password' && ctx.username === TEST_USER && ctx.password === TEST_PASSWORD) {
           ctx.accept()

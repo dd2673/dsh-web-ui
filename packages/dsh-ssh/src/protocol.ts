@@ -27,6 +27,8 @@ export interface SshHostEntry {
     /** Password for 'password' auth. */
     password?: string
   }
+  /** Pinned server host-key fingerprint (SHA256:<ssh2 digest>). */
+  hostKeySha256?: string
   /** Jump chain: local aliases connected through in order (ProxyJump). */
   proxyJump: string[]
   /** Free-form note. */
@@ -50,6 +52,8 @@ export interface SshHostSummary {
   auth: SshAuthKind
   /** Whether the key path exists on the host machine (key auth only). */
   keyReady: boolean
+  /** Trusted server host-key fingerprint; absent until explicitly accepted. */
+  hostKeySha256?: string
   proxyJump: string[]
   description?: string
   environment?: string
@@ -135,6 +139,8 @@ export interface HostPayload {
    * stored secrets (the browser never receives them back).
    */
   auth?: SshHostEntry['auth']
+  /** Explicitly trusted host-key fingerprint. */
+  hostKeySha256?: string
   proxyJump?: string[]
   description?: string
   environment?: string
@@ -173,6 +179,7 @@ export const SSH_API = {
   hosts: SSH_API_BASE + '/hosts',
   importSshConfig: SSH_API_BASE + '/hosts/import-ssh-config',
   test: SSH_API_BASE + '/test',
+  hostKey: SSH_API_BASE + '/host-key',
   exec: SSH_API_BASE + '/exec',
   cluster: SSH_API_BASE + '/cluster',
   upload: SSH_API_BASE + '/upload',

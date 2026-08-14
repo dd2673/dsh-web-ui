@@ -90,6 +90,31 @@ export interface GraphView {
   hasMore: boolean
 }
 
+/** One changed path in the index/worktree. */
+export interface ChangeRow {
+  path: string
+  index: string
+  worktree: string
+  untracked: boolean
+  conflicted: boolean
+}
+
+/** Codex-style source-control snapshot. */
+export interface WorkbenchView {
+  root: string
+  branch: string
+  upstream?: string
+  ahead: number
+  behind: number
+  remotes: string[]
+  changes: ChangeRow[]
+}
+
+/** Outcome of a source-control mutation. */
+export type GitActionResult =
+  | { ok: true; message: string }
+  | { ok: false; error: GitError }
+
 /** Parse output of `git for-each-ref refs/heads --format=...`. */
 export function parseBranches(stdout: string): BranchRow[] {
   const rows: BranchRow[] = []
@@ -127,6 +152,36 @@ export function parsePorcelain(stdout: string): { dirtyFiles: number; untrackedF
     else dirtyFiles += 1
   }
   return { dirtyFiles, untrackedFiles, conflicts }
+}
+
+/** Parse NUL-framed porcelain-v1 rows without locale- or filename-dependent splitting. */
+export function parseWorkbenchPorcelain(stdout: string): ChangeRow[] {
+  const rows: ChangeRow[] = []
+  const fields = stdout.split('\0')
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index]
+    if (field === undefined || field === '') continue
+    const xy = field.slice(0, 2)
+    const path = field.slice(3)
+    rows.push({
+      path,
+      index: xy[0] ?? ' ',
+      worktree: xy[1] ?? ' ',
+      untracked: xy === '??',
+      conflicted: xy.includes('U') || xy === 'AA' || xy === 'DD',
+    })
+    if ((xy[0] === 'R' || xy[0] === 'C') && fields[index + 1] !== undefined) index += 1
+  }
+  return rows
+}
+
+/** Parse `git rev-list --left-right --count upstream...HEAD`. */
+export function parseAheadBehind(stdout: string): { behind: number; ahead: number } {
+  const [behindRaw, aheadRaw] = stdout.trim().split(/\s+/)
+  return {
+    behind: Number.parseInt(behindRaw ?? '0', 10) || 0,
+    ahead: Number.parseInt(aheadRaw ?? '0', 10) || 0,
+  }
 }
 
 /**

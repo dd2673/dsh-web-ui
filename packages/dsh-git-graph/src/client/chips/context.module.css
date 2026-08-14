@@ -292,6 +292,170 @@
   padding: 16px 16px 12px;
 }
 
+.workbenchDialog {
+  width: min(1040px, calc(100vw - 32px));
+  max-height: min(88vh, 900px);
+}
+
+.workbenchTabs {
+  display: flex;
+  gap: 4px;
+  margin-top: 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.workbenchTabs button,
+.workbenchToolbar button,
+.workbenchToolbar select,
+.changeRow button,
+.workbenchBulk button,
+.workbenchCommit button {
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 7px;
+  background: var(--dsw-alias-button-tool-bar-fill);
+  color: var(--dsw-alias-label-secondary);
+  padding: 5px 9px;
+  font: inherit;
+}
+
+.workbenchTabs button {
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+}
+
+.workbenchTabs button[data-active='true'] {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.workbenchTabs button:not(:disabled),
+.workbenchToolbar button:not(:disabled),
+.changeRow button:not(:disabled),
+.workbenchBulk button:not(:disabled),
+.workbenchCommit button:not(:disabled) {
+  cursor: pointer;
+}
+
+.workbenchTabs button:disabled,
+.workbenchToolbar button:disabled,
+.changeRow button:disabled,
+.workbenchBulk button:disabled,
+.workbenchCommit button:disabled {
+  opacity: 0.5;
+}
+
+.workbenchBody {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.workbenchToolbar,
+.workbenchBulk,
+.workbenchCommit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workbenchSpacer {
+  flex: 1;
+}
+
+.workbenchChanges {
+  min-height: 120px;
+  max-height: 270px;
+  overflow: auto;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 9px;
+  padding: 4px;
+}
+
+.changeRow {
+  display: grid;
+  grid-template-columns: 32px minmax(180px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 7px;
+}
+
+.changeRow:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.changeStatus {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--dsw-alias-brand-primary);
+  font-weight: 600;
+}
+
+.changePath {
+  overflow: hidden;
+  border: 0 !important;
+  background: none !important;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbenchDiff {
+  min-height: 100px;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 9px;
+  padding: 8px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.workbenchDiff pre {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.workbenchCommit textarea {
+  flex: 1;
+  min-height: 54px;
+  resize: vertical;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  padding: 8px;
+}
+
+.workbenchNotice {
+  margin-top: 8px;
+  color: var(--dsw-alias-state-success-primary, var(--dsw-alias-brand-primary));
+  font-size: 12px;
+}
+
+@media (max-width: 700px) {
+  .workbenchDialog {
+    width: calc(100vw - 16px);
+    max-height: 92vh;
+    padding: 12px 10px 8px;
+  }
+
+  .changeRow {
+    grid-template-columns: 28px minmax(100px, 1fr);
+  }
+
+  .changeRow button:not(.changePath) {
+    grid-column: 2;
+  }
+
+  .workbenchToolbar {
+    flex-wrap: wrap;
+  }
+}
+
 .dialogHeader {
   display: flex;
   align-items: flex-start;

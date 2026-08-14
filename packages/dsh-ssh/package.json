@@ -1,7 +1,7 @@
 {
-  "name": "@linxin666/dsh-ssh",
-  "description": "Remote SSH operations for the dsh web GUI: host config store (~/.dsh/dsh-ssh.json, import from ~/.ssh/config), a persistent ssh2 connection pool with jump-host support, exec / PTY web terminal / SFTP transfer / local port-forward tunnels / cluster execution, plus agent tools (ssh_list, ssh_exec, ssh_upload, ssh_download, ssh_tunnel, ssh_cluster). Hot-pluggable — mounted via ~/.dsh/cordis.patch.yml + a profile node_modules symlink, no dsh source changes.",
-  "version": "0.1.11",
+  "name": "dsh-wending-ssh-manager",
+  "description": "Hardened multi-account SSH manager for DSH: profile-isolated storage, host-key pinning, Windows DPAPI secrets, pooled exec/SFTP, isolated tunnels, web terminal, cluster operations, and official agent tools.",
+  "version": "0.2.0",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -43,8 +43,8 @@
     "bundle": "tsdown",
     "watch": "tsdown --watch",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run --pool=threads --maxWorkers=1 --no-file-parallelism",
+    "test:watch": "vitest --pool=threads --maxWorkers=1 --no-file-parallelism"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -105,6 +105,6 @@
   "license": "BSD-3-Clause",
   "repository": {
     "type": "git",
-    "url": "https://github.com/zhu1090093659/dsh-web-ui.git"
+    "url": "https://github.com/dd2673/dsh-web-ui.git"
   }
 }

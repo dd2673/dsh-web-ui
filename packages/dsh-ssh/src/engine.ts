@@ -5,7 +5,7 @@
  * ssh-skill's daemon + scripts, living entirely in the host process.
  */
 
-import { createServer, type Server as NetServer } from 'node:net'
+import { createServer, type Server as NetServer, type Socket } from 'node:net'
 import { existsSync, mkdirSync, readFileSync, statSync, readdirSync } from 'node:fs'
 import { dirname, join, relative, resolve as resolvePath } from 'node:path'
 import { Client, type ClientChannel, type ConnectConfig } from 'ssh2'
@@ -46,8 +46,6 @@ interface PoolRecord {
   /** Jump-chain clients kept alive under the target. */
   hops: Client[]
   idleAt: number
-  /** Pinned connections (tunnels) are never swept. */
-  pinned: boolean
   broken: boolean
   /** Operations currently running on this connection (sweep guard). */
   inFlight: number
@@ -76,11 +74,18 @@ interface TunnelRecord {
   info: TunnelInfo
   server: NetServer
   alias: string
-  sockets: Set<import('node:net').Socket>
+  sockets: Set<Socket>
+  client: Client
+  hops: Client[]
 }
 
-/** Build the ssh2 connect config for one entry (key read from disk). */
-function buildConnectConfig(entry: SshHostEntry, sock?: ConnectConfig['sock']): ConnectConfig {
+/** Normalize ssh2's SHA-256 digest for storage and display. */
+function fingerprint(value: string): string {
+  return `SHA256:${value}`
+}
+
+/** Build the transport half of an ssh2 config. */
+function buildBaseConnectConfig(entry: SshHostEntry, sock?: ConnectConfig['sock']): ConnectConfig {
   const config: ConnectConfig = {
     host: entry.host,
     port: entry.port,
@@ -90,6 +95,17 @@ function buildConnectConfig(entry: SshHostEntry, sock?: ConnectConfig['sock']): 
     keepaliveCountMax: 3,
   }
   if (sock !== undefined) config.sock = sock
+  return config
+}
+
+/** Build a strict ssh2 config for one entry (key read from disk). */
+function buildConnectConfig(entry: SshHostEntry, sock?: ConnectConfig['sock']): ConnectConfig {
+  if (entry.hostKeySha256 === undefined) {
+    throw new Error(`host key for '${entry.alias}' is not trusted — scan and accept it in the SSH panel first`)
+  }
+  const config = buildBaseConnectConfig(entry, sock)
+  config.hostHash = 'sha256'
+  config.hostVerifier = (value: string) => fingerprint(value) === entry.hostKeySha256
   if (entry.auth.kind === 'password') {
     config.password = entry.auth.password
   } else {
@@ -213,9 +229,15 @@ export class SshEngine {
     let lastError: unknown
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       let record = this.pool.get(alias)
-      if (record === undefined || record.broken) {
-        if (record !== undefined) this.disposeRecord(alias, record)
-        record = await this.acquire(alias)
+      try {
+        if (record === undefined || record.broken) {
+          if (record !== undefined) this.disposeRecord(alias, record)
+          record = await this.acquire(alias)
+        }
+      } catch (error) {
+        lastError = error
+        if (attempt < attempts) continue
+        break
       }
       record.idleAt = Date.now()
       record.inFlight += 1
@@ -223,6 +245,13 @@ export class SshEngine {
         const result = await fn(record.client)
         record.idleAt = Date.now()
         return result
+      } catch (error) {
+        // The remote operation may already have started. Never replay it
+        // automatically; retire the broken connection for the next user retry.
+        lastError = error
+        record.broken = true
+        this.disposeRecord(alias, record)
+        throw error
       } finally {
         record.inFlight -= 1
       }
@@ -291,7 +320,7 @@ export class SshEngine {
     const entry = this.store.find(alias)
     if (entry === undefined) throw new Error(`alias '${alias}' not found — add it first`)
     const { client, hops } = await this.connectChain(entry)
-    const record: PoolRecord = { client, hops, idleAt: Date.now(), pinned: false, broken: false, inFlight: 0 }
+    const record: PoolRecord = { client, hops, idleAt: Date.now(), broken: false, inFlight: 0 }
     client.on('error', () => { record.broken = true })
     client.on('close', () => { record.broken = true })
     this.pool.set(alias, record)
@@ -318,7 +347,7 @@ export class SshEngine {
   private sweep(): void {
     const cutoff = Date.now() - this.opts.idleTimeoutMs
     for (const [alias, record] of this.pool) {
-      if (!record.pinned && record.inFlight === 0 && record.idleAt < cutoff) {
+      if (record.inFlight === 0 && record.idleAt < cutoff) {
         this.disposeRecord(alias, record)
       }
     }
@@ -477,6 +506,60 @@ export class SshEngine {
         resolve(session)
       })
     })
+  }
+
+  /** Probe the server key without sending password/private-key credentials. */
+  async scanHostKey(alias: string): Promise<string> {
+    const entry = this.store.find(alias)
+    if (entry === undefined) throw new Error(`alias '${alias}' not found — add it first`)
+    const hops: Client[] = []
+    let sock: ConnectConfig['sock']
+    try {
+      for (let index = 0; index < entry.proxyJump.length; index += 1) {
+        const hopAlias = entry.proxyJump[index]
+        const hop = this.store.find(hopAlias)
+        if (hop === undefined) throw new Error(`proxyJump alias '${hopAlias}' not found — create it first`)
+        const hopClient = await connectClient(buildConnectConfig(hop, sock))
+        hops.push(hopClient)
+        const next = index + 1 < entry.proxyJump.length ? this.store.find(entry.proxyJump[index + 1]) : undefined
+        const nextHost = next?.host ?? entry.host
+        const nextPort = next?.port ?? entry.port
+        sock = await new Promise<ConnectConfig['sock']>((resolve, reject) => {
+          hopClient.forwardOut('127.0.0.1', 0, nextHost, nextPort, (error, stream) => {
+            if (error !== undefined) reject(error)
+            else resolve(stream)
+          })
+        })
+      }
+      let seen: string | undefined
+      const config = buildBaseConnectConfig(entry, sock)
+      config.hostHash = 'sha256'
+      config.hostVerifier = (value: string) => {
+        seen = fingerprint(value)
+        return false
+      }
+      try {
+        await connectClient(config)
+      } catch (error) {
+        if (seen !== undefined) return seen
+        throw error
+      }
+      throw new Error('SSH server did not present a host key')
+    } finally {
+      for (const hop of hops) {
+        try { hop.end() } catch { /* already closed */ }
+      }
+    }
+  }
+
+  /** Drop cached state after host configuration or trust changes. */
+  invalidate(alias?: string): void {
+    this.stopAllTunnels(alias)
+    if (alias === undefined) {
+      for (const name of [...this.pool.keys()]) this.disposeRecord(name)
+    } else {
+      this.disposeRecord(alias)
+    }
   }
 
   // -------------------------------------------------------------- sftp
@@ -679,9 +762,10 @@ export class SshEngine {
       state: 'connecting',
       startedAt: Date.now(),
     }
-    const record = await this.acquire(alias)
-    const client = record.client
-    const sockets = new Set<import('node:net').Socket>()
+    // Each tunnel owns an isolated SSH chain. Stopping one tunnel must never
+    // tear down sibling tunnels or pooled exec/SFTP work for the same alias.
+    const { client, hops } = await this.connectChain(entry)
+    const sockets = new Set<Socket>()
     const server = createServer((socket) => {
       sockets.add(socket)
       socket.on('close', () => { sockets.delete(socket) })
@@ -712,15 +796,14 @@ export class SshEngine {
         })
       })
     } catch (error) {
-      // Roll back: never leave an unpinned orphan connection behind.
-      if (!record.pinned && record.inFlight === 0) this.disposeRecord(alias, record)
+      try { client.end() } catch { /* already closed */ }
+      for (const hop of hops) { try { hop.end() } catch { /* already closed */ } }
       throw error
     }
-    record.pinned = true
     const address = server.address()
     info.localPort = typeof address === 'object' && address !== null ? address.port : 0
     info.state = 'forwarding'
-    this.tunnels.set(id, { info, server, alias, sockets })
+    this.tunnels.set(id, { info, server, alias, sockets, client, hops })
     return info
   }
 
@@ -739,7 +822,8 @@ export class SshEngine {
       try { socket.destroy() } catch { /* already closed */ }
     }
     tunnel.sockets.clear()
-    this.disposeRecord(tunnel.alias)
+    try { tunnel.client.end() } catch { /* already closed */ }
+    for (const hop of tunnel.hops) { try { hop.end() } catch { /* already closed */ } }
     return true
   }
 

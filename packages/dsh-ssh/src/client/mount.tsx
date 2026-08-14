@@ -18,7 +18,8 @@ import css from './panel/panel.module.css'
 /** The injected panel container (kept in the DOM, hidden when inactive). */
 export const PANEL_VIEW_SELECTOR = '[data-dsh-ssh-view]'
 
-const CONVERSATION_COLUMN_SELECTOR = '[data-pane="conversation"]'
+const CONVERSATION_COLUMN_SELECTOR = '[data-pane="conversation"], [class*="centerCol"]'
+const HOST_ATTR = 'data-dsh-ssh-host'
 const ACTIVE_ATTR = 'data-dsh-ssh-active'
 /** The sibling panel's activation attribute (task board), removed when this panel opens. */
 const OTHER_ACTIVE_ATTR = 'data-dsh-taskboard-active'
@@ -53,6 +54,10 @@ export function mountPanel(controller: PanelController, api: SshApi): () => void
     }
     const column = conversationColumn()
     if (column === undefined) return
+    // rc.6 no longer emits data-pane="conversation". Mark the compatible
+    // center-column fallback ourselves so the stylesheet never depends on a
+    // generated CSS-module prefix beyond this one discovery query.
+    column.setAttribute(HOST_ATTR, '')
     container = document.createElement('div')
     container.dataset.dshSshView = ''
     container.className = css.view
@@ -110,5 +115,6 @@ export function mountPanel(controller: PanelController, api: SshApi): () => void
     root = undefined
     container?.remove()
     container = undefined
+    document.querySelector<HTMLElement>(`[${HOST_ATTR}]`)?.removeAttribute(HOST_ATTR)
   }
 }

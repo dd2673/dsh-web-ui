@@ -1,15 +1,15 @@
 /**
- * Package-owned invariant companion for `@linxin666/dsh-client-ui-git-graph`.
+ * Package-owned invariant companion for `dsh-wending-git-workbench`.
  * Not mounted by the bundle patch (the web profile composes no invariants
  * service); kept as the repo-convention companion for compositions that do.
- * @module @linxin666/dsh-client-ui-git-graph/invariant
+ * @module dsh-wending-git-workbench/invariant
  */
 
 /* jscpd:ignore-start */
 import type { Context } from '@deepseek-ai/cordis'
 import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 
-const PACKAGE_NAME = '@linxin666/dsh-client-ui-git-graph'
+const PACKAGE_NAME = 'dsh-wending-git-workbench'
 
 /** Cordis companion plugin name. */
 export const name = 'git-graph-invariant'

@@ -8,7 +8,7 @@
 
 /* --- center-column takeover (global rules, attribute-scoped) ----------------- */
 
-[data-pane='conversation'] {
+[data-dsh-ssh-host] {
   position: relative;
 }
 
@@ -30,7 +30,7 @@ html[data-dsh-ssh-active]:not([data-dsh-taskboard-active]) [data-dsh-ssh-view] {
 
 /* While the panel is active, the conversation content underneath is hidden
    (it stays mounted and stateful). */
-html[data-dsh-ssh-active]:not([data-dsh-taskboard-active]) [data-pane='conversation'] > :not([data-dsh-ssh-view]) {
+html[data-dsh-ssh-active]:not([data-dsh-taskboard-active]) [data-dsh-ssh-host] > :not([data-dsh-ssh-view]) {
   display: none;
 }
 

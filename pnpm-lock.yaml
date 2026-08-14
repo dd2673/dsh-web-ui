@@ -577,9 +577,6 @@ importers:
       '@linxin666/dsh-client-ui-aionui-panel':
         specifier: workspace:*
         version: link:../dsh-aionui-panel
-      '@linxin666/dsh-client-ui-git-graph':
-        specifier: workspace:*
-        version: link:../dsh-git-graph
       '@linxin666/dsh-client-ui-task-board':
         specifier: workspace:*
         version: link:../dsh-task-board
@@ -598,7 +595,10 @@ importers:
       '@linxin666/dsh-skins':
         specifier: workspace:*
         version: link:../dsh-skins
-      '@linxin666/dsh-ssh':
+      dsh-wending-git-workbench:
+        specifier: workspace:*
+        version: link:../dsh-git-graph
+      dsh-wending-ssh-manager:
         specifier: workspace:*
         version: link:../dsh-ssh
 

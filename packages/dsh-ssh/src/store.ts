@@ -1,15 +1,17 @@
 /**
  * Host config store: one JSON file (`~/.dsh/dsh-ssh.json`) holding every
  * SSH host entry, written atomically (tmp + rename). Also parses the user's
- * standard `~/.ssh/config` for one-shot import. Secrets (passwords,
- * passphrases) live in this user-owned file in plaintext — same trust model
- * as ssh-skill's annotated ssh-config comments; document it, never log it.
+ * standard `~/.ssh/config` for one-shot import. On Windows, password and
+ * passphrase values are protected with CurrentUser DPAPI before JSON is
+ * written. Other platforms retain the owner-only 0600 file model until a
+ * native keyring adapter is added. Secrets must never be logged.
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import type { HostPayload, ImportResult, SshHostEntry, SshHostSummary } from './protocol.ts'
+import { protectSecret, unprotectSecret } from './secret-protection.ts'
 
 /** File format version. */
 const FORMAT_VERSION = 1
@@ -55,6 +57,9 @@ export function validateHostPayload(payload: unknown): string | undefined {
   if (p.tags !== undefined && (!Array.isArray(p.tags) || p.tags.some(x => typeof x !== 'string'))) {
     return 'tags must be an array of strings'
   }
+  if (p.hostKeySha256 !== undefined && (typeof p.hostKeySha256 !== 'string' || !/^SHA256:[A-Za-z0-9+/=]{40,128}$/.test(p.hostKeySha256))) {
+    return 'hostKeySha256 must be a SHA256 fingerprint'
+  }
   return undefined
 }
 
@@ -75,6 +80,8 @@ export class HostStore {
   readonly path: string
   /** Optional override of the ~/.ssh/config path (tests). */
   private readonly sshConfigOverride: string | undefined
+  /** Decrypted process-local view; prevents repeated DPAPI subprocess work. */
+  private cache: StoreFile | undefined
 
   /**
    * @param path - store file path (defaults to the standard location).
@@ -109,6 +116,7 @@ export class HostStore {
       user: entry.user,
       auth: entry.auth.kind,
       keyReady,
+      ...(entry.hostKeySha256 !== undefined ? { hostKeySha256: entry.hostKeySha256 } : {}),
       proxyJump: [...entry.proxyJump],
       // Optional fields are spread conditionally: the tool bridge rejects
       // undefined-valued properties as non-lossless JSON.
@@ -144,6 +152,7 @@ export class HostStore {
         passphrase: payload.auth.kind === 'key' ? payload.auth.passphrase ?? undefined : undefined,
         password: payload.auth.kind === 'password' ? payload.auth.password : undefined,
       },
+      hostKeySha256: payload.hostKeySha256,
       proxyJump: [...(payload.proxyJump ?? [])],
       description: payload.description?.trim() || undefined,
       environment: payload.environment?.trim() || undefined,
@@ -204,6 +213,12 @@ export class HostStore {
           : undefined,
         password: auth.kind === 'password' ? auth.password : undefined,
       }
+    }
+    if (patch.hostKeySha256 !== undefined) {
+      if (!/^SHA256:[A-Za-z0-9+/=]{40,128}$/.test(patch.hostKeySha256)) {
+        throw new Error('hostKeySha256 must be a SHA256 fingerprint')
+      }
+      entry.hostKeySha256 = patch.hostKeySha256
     }
     if (patch.proxyJump !== undefined) entry.proxyJump = [...patch.proxyJump]
     if (patch.description !== undefined) entry.description = patch.description.trim() || undefined
@@ -307,13 +322,14 @@ export class HostStore {
   private skippedNames = new Set<string>()
 
   private load(): StoreFile {
+    if (this.cache !== undefined) return this.cache
     if (!existsSync(this.path)) return { version: FORMAT_VERSION, hosts: [] }
+    let parsed: StoreFile
     try {
-      const parsed = JSON.parse(readFileSync(this.path, 'utf8')) as StoreFile
+      parsed = JSON.parse(readFileSync(this.path, 'utf8')) as StoreFile
       if (typeof parsed !== 'object' || parsed === null || !Array.isArray(parsed.hosts)) {
         throw new Error('store file shape invalid')
       }
-      return parsed
     } catch {
       // A corrupt store must not brick the plugin — and must not be silently
       // overwritten by the next save: rename it aside for manual recovery
@@ -321,8 +337,17 @@ export class HostStore {
       try {
         renameSync(this.path, `${this.path}.corrupt-${Date.now()}`)
       } catch { /* best effort */ }
-      return { version: FORMAT_VERSION, hosts: [] }
+      this.cache = { version: FORMAT_VERSION, hosts: [] }
+      return this.cache
     }
+    // Decryption failures are not file corruption. In particular, DPAPI data
+    // opened under another Windows account must stay in place for recovery.
+    for (const entry of parsed.hosts) {
+      entry.auth.password = unprotectSecret(entry.auth.password)
+      entry.auth.passphrase = unprotectSecret(entry.auth.passphrase)
+    }
+    this.cache = parsed
+    return parsed
   }
 
   private save(file: StoreFile): void {
@@ -331,8 +356,20 @@ export class HostStore {
     const tmp = this.path + '.tmp'
     // Secrets live in this file: keep it readable by the owner only. The
     // tmp file carries the 0600 mode through the rename.
-    writeFileSync(tmp, JSON.stringify(file, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
+    const persisted: StoreFile = {
+      version: file.version,
+      hosts: file.hosts.map(entry => ({
+        ...entry,
+        auth: {
+          ...entry.auth,
+          password: protectSecret(entry.auth.password),
+          passphrase: protectSecret(entry.auth.passphrase),
+        },
+      })),
+    }
+    writeFileSync(tmp, JSON.stringify(persisted, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
     renameSync(tmp, this.path)
+    this.cache = file
   }
 }
 

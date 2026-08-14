@@ -128,6 +128,26 @@ export class SshApi {
     return body.result
   }
 
+  async scanHostKey(alias: string): Promise<string> {
+    const response = await fetch(SSH_API.hostKey, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'scan', alias }),
+    })
+    const body = await readJson<{ fingerprint: string }>(response)
+    return body.fingerprint
+  }
+
+  async trustHostKey(alias: string, fingerprint: string): Promise<SshHostSummary> {
+    const response = await fetch(SSH_API.hostKey, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'trust', alias, fingerprint }),
+    })
+    const body = await readJson<{ host: SshHostSummary }>(response)
+    return body.host
+  }
+
   async exec(alias: string, command: string, timeoutMs?: number): Promise<ExecResult> {
     const response = await fetch(SSH_API.exec, {
       method: 'POST',

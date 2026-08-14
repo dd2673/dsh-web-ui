@@ -153,6 +153,7 @@ export function makeRoutes(deps: SshRoutesDeps): { routes: WebRoute[]; upgrade: 
           }
           try {
             const entry = store.create(body as unknown as HostPayload)
+            engine.invalidate(entry.alias)
             writeJson(res, 201, { host: store.summarize(entry) })
           } catch (error) {
             writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
@@ -176,6 +177,7 @@ export function makeRoutes(deps: SshRoutesDeps): { routes: WebRoute[]; upgrade: 
           }
           try {
             const entry = store.update(alias, body as unknown as Partial<HostPayload>)
+            engine.invalidate(alias)
             writeJson(res, 200, { host: store.summarize(entry) })
           } catch (error) {
             writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
@@ -186,6 +188,7 @@ export function makeRoutes(deps: SshRoutesDeps): { routes: WebRoute[]; upgrade: 
           try {
             engine.stopAllTunnels(alias)
             store.delete(alias)
+            engine.invalidate(alias)
             writeJson(res, 200, { ok: true })
           } catch (error) {
             writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
@@ -193,6 +196,37 @@ export function makeRoutes(deps: SshRoutesDeps): { routes: WebRoute[]; upgrade: 
           return
         }
         writeJson(res, 405, { error: `method not allowed: ${method}` })
+      },
+    },
+    {
+      kind: 'exact',
+      path: SSH_API.hostKey,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const alias = typeof body?.alias === 'string' ? body.alias : ''
+        const action = typeof body?.action === 'string' ? body.action : 'scan'
+        if (alias === '') {
+          writeJson(res, 400, { error: 'alias is required' })
+          return
+        }
+        try {
+          const scanned = await engine.scanHostKey(alias)
+          if (action === 'scan') {
+            writeJson(res, 200, { fingerprint: scanned })
+            return
+          }
+          const expected = typeof body?.fingerprint === 'string' ? body.fingerprint : ''
+          if (action !== 'trust' || expected === '' || expected !== scanned) {
+            writeJson(res, 409, { error: 'server host key changed before it could be trusted', fingerprint: scanned })
+            return
+          }
+          const entry = store.update(alias, { hostKeySha256: scanned })
+          engine.invalidate(alias)
+          writeJson(res, 200, { host: store.summarize(entry), fingerprint: scanned })
+        } catch (error) {
+          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
       },
     },
     {
@@ -367,6 +401,7 @@ export function makeRoutes(deps: SshRoutesDeps): { routes: WebRoute[]; upgrade: 
         const tmp = join(staging, `upload-${randomBytes(6).toString('hex')}`)
         const sink = createWriteStream(tmp)
         let settled = false
+        let received = 0
         // Every terminal path (sink error, client abort, response loss) must
         // emit a result frame, end the response, and remove the tmp file.
         const fail = (error: unknown): void => {
@@ -385,6 +420,14 @@ export function makeRoutes(deps: SshRoutesDeps): { routes: WebRoute[]; upgrade: 
         sink.on('error', (error) => fail(error))
         req.on('error', (error) => fail(error))
         req.on('aborted', () => fail('upload aborted by the client'))
+        req.on('data', (chunk: Buffer) => {
+          received += chunk.length
+          if (received > MAX_UPLOAD_BYTES) {
+            req.unpipe(sink)
+            fail('upload body too large')
+            req.destroy()
+          }
+        })
         res.on('error', () => fail('response stream closed'))
         res.on('close', () => { if (!res.writableEnded) fail('connection closed') })
         req.pipe(sink)
@@ -518,10 +561,12 @@ export function makeRoutes(deps: SshRoutesDeps): { routes: WebRoute[]; upgrade: 
           } catch {
             return
           }
-          if (frame.type === 'input') {
+          if (frame.type === 'input' && typeof frame.data === 'string' && frame.data.length <= 1024 * 1024) {
             session?.send(frame.data)
-          } else if (frame.type === 'resize') {
-            session?.resize(Math.max(2, frame.cols), Math.max(1, frame.rows))
+          } else if (frame.type === 'resize' && Number.isFinite(frame.cols) && Number.isFinite(frame.rows)) {
+            const safeCols = Math.min(1000, Math.max(2, Math.trunc(frame.cols)))
+            const safeRows = Math.min(1000, Math.max(1, Math.trunc(frame.rows)))
+            session?.resize(safeCols, safeRows)
           }
         })
         ws.on('close', () => {

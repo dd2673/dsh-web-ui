@@ -1,19 +1,16 @@
 // @vitest-environment jsdom
 /**
  * Client apply() registration tests: the browser half registers the branch
- * chip on the input selector row's context hole
- * (`conversation.input.selector.context`, session-maybe), NOT the composer
- * dock band — the hole the shipped ui-conversation shell renders right beside
- * the official workspace selector. This guards the acbcf80 regression where
- * the chip was moved to `conversation.input.dock` on the wrong premise that
- * the selector-context hole was undeclared.
+ * chip on the published `conversation.input.left` composer control slot.
+ * This guards against registering an invented/removed slot name that accepts
+ * no entry in the running rc.6 shell.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { apply } from '../src/client/index.ts'
 import { BranchChip } from '../src/client/chips/BranchChip.tsx'
 
 describe('client apply()', () => {
-  it('registers the branch chip on the selector-context hole (session-maybe)', () => {
+  it('registers the branch chip on the official composer control slot', () => {
     const register = vi.fn(() => () => undefined)
     const slotInject = vi.fn((_name: string, callback: () => () => void) => callback())
 
@@ -31,12 +28,12 @@ describe('client apply()', () => {
     apply(ctx as never)
 
     // The registration waits on the conversation/sessions seam, then on the
-    // selector-context declaration before registering the chip component.
+    // official slot declaration before registering the chip component.
     expect(ctx.inject).toHaveBeenCalledWith(['slots', 'conversation', 'sessions'], expect.any(Function))
-    expect(slotInject).toHaveBeenCalledWith('conversation.input.selector.context', expect.any(Function))
+    expect(slotInject).toHaveBeenCalledWith('conversation.input.left', expect.any(Function))
     expect(register).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: 'conversation.input.selector.context',
+        name: 'conversation.input.left',
         id: 'git-graph',
         order: 100,
       }),

@@ -1,0 +1,9 @@
+{
+  "skill_slug": "dsh-wending-git-workbench",
+  "source_url": "https://github.com/dd2673/dsh-web-ui",
+  "package_version": "0.2.0",
+  "agent_audit_result": "unknown-tool-crash",
+  "manual_review": "passed",
+  "npm_audit_production_vulnerabilities": 0,
+  "notes": ["AgentAudit hit a Windows libuv assertion; package integrity and install scripts were manually reviewed before installation."]
+}

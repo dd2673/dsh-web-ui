@@ -9,4 +9,4 @@
 # (exports "./client", served at /plugins/<id>/client.js) load in the web GUI.
 - insert:
     - id: ssh
-      name: '@linxin666/dsh-ssh'
+      name: 'dsh-wending-ssh-manager'

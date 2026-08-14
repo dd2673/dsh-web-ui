@@ -143,6 +143,64 @@ export function registerGitRoutes(ctx: Context, service: GitService): () => void
         json(res, OK(await service.graph(path, limit)))
         return
       }
+      case '/git/workbench':
+        json(res, OK(await service.workbench(path)))
+        return
+      case '/git/diff': {
+        const record = payload as Record<string, unknown>
+        const file = record.file
+        if (typeof file !== 'string' || file === '') {
+          json(res, FAIL(BAD_REQUEST))
+          return
+        }
+        json(res, OK(await service.diff(path, file, record.staged === true)))
+        return
+      }
+      case '/git/stage':
+      case '/git/unstage': {
+        const file = (payload as Record<string, unknown>).file
+        if (file !== undefined && typeof file !== 'string') {
+          json(res, FAIL(BAD_REQUEST))
+          return
+        }
+        const result = pathname === '/git/stage'
+          ? await service.stage(path, file as string | undefined)
+          : await service.unstage(path, file as string | undefined)
+        json(res, result.ok ? OK({ message: result.message }) : FAIL(result.error))
+        return
+      }
+      case '/git/discard': {
+        const file = (payload as Record<string, unknown>).file
+        if (typeof file !== 'string' || file === '') {
+          json(res, FAIL(BAD_REQUEST))
+          return
+        }
+        const result = await service.discard(path, file)
+        json(res, result.ok ? OK({ message: result.message }) : FAIL(result.error))
+        return
+      }
+      case '/git/commit': {
+        const message = (payload as Record<string, unknown>).message
+        if (typeof message !== 'string') {
+          json(res, FAIL(BAD_REQUEST))
+          return
+        }
+        const result = await service.commit(path, message)
+        json(res, result.ok ? OK({ message: result.message }) : FAIL(result.error))
+        return
+      }
+      case '/git/sync': {
+        const record = payload as Record<string, unknown>
+        const action = record.action
+        if (action !== 'fetch' && action !== 'pull' && action !== 'push') {
+          json(res, FAIL(BAD_REQUEST))
+          return
+        }
+        const remote = typeof record.remote === 'string' ? record.remote : undefined
+        const result = await service.sync(path, action, remote)
+        json(res, result.ok ? OK({ message: result.message }) : FAIL(result.error))
+        return
+      }
       case '/git/switch': {
         const branch = typeof payload === 'object' && payload !== null
           ? (payload as Record<string, unknown>).branch

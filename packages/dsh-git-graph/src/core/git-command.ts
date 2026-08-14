@@ -25,6 +25,23 @@ export const forEachRefArgv = (): string[] => [
 /** `git status --porcelain` — worktree dirtiness and conflicts. */
 export const statusPorcelainArgv = (): string[] => ['status', '--porcelain']
 
+/** NUL-framed worktree/index status for the management panel. */
+export const workbenchStatusArgv = (): string[] => ['status', '--porcelain=v1', '-z', '--untracked-files=normal']
+
+export const remotesArgv = (): string[] => ['remote']
+export const upstreamArgv = (): string[] => ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']
+export const aheadBehindArgv = (): string[] => ['rev-list', '--left-right', '--count', '@{upstream}...HEAD']
+export const diffArgv = (path: string, staged: boolean): string[] => [
+  'diff', '--no-ext-diff', '--no-color', '-U3', ...(staged ? ['--cached'] : []), '--', path,
+]
+export const stageArgv = (path?: string): string[] => ['add', '-A', ...(path === undefined ? [] : ['--', path])]
+export const unstageArgv = (path?: string): string[] => ['reset', '-q', 'HEAD', ...(path === undefined ? [] : ['--', path])]
+export const discardArgv = (path: string): string[] => ['restore', '--worktree', '--', path]
+export const commitArgv = (message: string): string[] => ['commit', '-m', message]
+export const fetchArgv = (remote: string): string[] => ['fetch', '--prune', remote]
+export const pullArgv = (): string[] => ['pull', '--ff-only']
+export const pushArgv = (): string[] => ['push']
+
 /** `git diff --name-only --diff-filter=U` — unmerged (conflict) files. */
 export const unmergedArgv = (): string[] => ['diff', '--name-only', '--diff-filter=U']
 

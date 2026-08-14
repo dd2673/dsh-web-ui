@@ -25,7 +25,7 @@
 # from ../dsh-git-graph
 - insert:
     - id: ui-git-graph
-      name: '@linxin666/dsh-client-ui-git-graph'
+      name: 'dsh-wending-git-workbench'
 
 # from ../dsh-pet
 - insert:
@@ -45,7 +45,7 @@
 # from ../dsh-ssh
 - insert:
     - id: ssh
-      name: '@linxin666/dsh-ssh'
+      name: 'dsh-wending-ssh-manager'
 
 # from ../skins/skin-center (via ../dsh-skins)
 - insert:

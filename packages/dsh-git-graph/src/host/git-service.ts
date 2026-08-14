@@ -13,14 +13,16 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-subprocess'
 import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import {
-  checkRefFormatArgv, classifySwitchFailure, createBranchArgv, forEachRefArgv,
+  aheadBehindArgv, checkRefFormatArgv, classifySwitchFailure, commitArgv, createBranchArgv, diffArgv,
+  discardArgv, fetchArgv, forEachRefArgv,
   gitPathArgv, graphLogArgv, headBranchArgv, headShortArgv, OPERATION_MARKERS,
-  statusPorcelainArgv, switchArgv, topLevelArgv, unmergedArgv, validateBranchName,
+  pullArgv, pushArgv, remotesArgv, stageArgv, statusPorcelainArgv, switchArgv, topLevelArgv,
+  unmergedArgv, unstageArgv, upstreamArgv, validateBranchName, workbenchStatusArgv,
   verifyRefArgv, worktreeListArgv,
 } from '../core/git-command.ts'
 import {
-  parseBranches, parseGraph, parsePorcelain, parseWorktreeBranches,
-  type BranchesView, type GitError, type GraphView, type RepoStatus, type SwitchResult,
+  parseAheadBehind, parseBranches, parseGraph, parsePorcelain, parseWorkbenchPorcelain, parseWorktreeBranches,
+  type BranchesView, type GitActionResult, type GitError, type GraphView, type RepoStatus, type SwitchResult, type WorkbenchView,
 } from '../core/types.ts'
 
 /** One finished git invocation. */
@@ -32,7 +34,7 @@ export interface GitRunResult {
 
 /** The spawn seam the service runs git through (subprocess service in production). */
 export interface GitRunner {
-  run(argv: readonly string[], cwd: string): Promise<GitRunResult>
+  run(argv: readonly string[], cwd: string, timeoutMs?: number): Promise<GitRunResult>
 }
 
 /** Collected-output cap for one git command (branch lists and logs fit comfortably). */
@@ -57,7 +59,9 @@ export type WorkspaceGate = (path: string) => Promise<WorkspaceVerdict>
  */
 export function subprocessRunner(ctx: Context): GitRunner {
   return {
-    async run(argv, cwd) {
+    async run(argv, cwd, timeoutMs = 30_000) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => { controller.abort() }, timeoutMs)
       const spec: SubprocessSpawnSpec = {
         argv: ['git', ...argv],
         cwd,
@@ -67,12 +71,18 @@ export function subprocessRunner(ctx: Context): GitRunner {
           stderr: { maxBytes: OUTPUT_CAP_BYTES },
         },
         graceMs: 10_000,
+        signal: controller.signal,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never' },
       }
-      const handle = ctx.subprocess.spawn(spec)
-      const outcome = await handle.done
-      const stdout = handle.collected.stdout?.readFrom(0).text ?? ''
-      const stderr = handle.collected.stderr?.readFrom(0).text ?? ''
-      return { exitCode: outcome.exitCode, stdout, stderr }
+      try {
+        const handle = ctx.subprocess.spawn(spec)
+        const outcome = await handle.done
+        const stdout = handle.collected.stdout?.readFrom(0).text ?? ''
+        const stderr = handle.collected.stderr?.readFrom(0).text ?? ''
+        return { exitCode: outcome.exitCode, stdout, stderr }
+      } finally {
+        clearTimeout(timer)
+      }
     },
   }
 }
@@ -229,6 +239,106 @@ export class GitService {
       branch: branch === DETACHED ? '' : branch,
       commits: hasMore ? commits.slice(0, limit) : commits,
       hasMore,
+    }
+  }
+
+  /** Full source-control state for the Git workbench. */
+  async workbench(path: string): Promise<WorkbenchView | null> {
+    const gated = await this.gate(path)
+    if (!gated.ok) return null
+    const root = await this.repoRoot(gated.canonical)
+    if (root === null) return null
+    const [branchResult, changesResult, remotesResult, upstreamResult] = await Promise.all([
+      this.runner.run(headBranchArgv(), root),
+      this.runner.run(workbenchStatusArgv(), root),
+      this.runner.run(remotesArgv(), root),
+      this.runner.run(upstreamArgv(), root),
+    ])
+    const upstream = upstreamResult.exitCode === 0 ? upstreamResult.stdout.trim() : undefined
+    const counts = upstream === undefined
+      ? { ahead: 0, behind: 0 }
+      : parseAheadBehind((await this.runner.run(aheadBehindArgv(), root)).stdout)
+    const branch = branchResult.stdout.trim()
+    return {
+      root,
+      branch: branch === DETACHED ? '' : branch,
+      ...(upstream !== undefined && upstream !== '' ? { upstream } : {}),
+      ...counts,
+      remotes: remotesResult.stdout.split('\n').map(value => value.trim()).filter(value => value !== ''),
+      changes: parseWorkbenchPorcelain(changesResult.stdout),
+    }
+  }
+
+  async diff(path: string, file: string, staged: boolean): Promise<string | null> {
+    const root = await this.allowedRoot(path)
+    if (root === null) return null
+    return (await this.runner.run(diffArgv(file, staged), root)).stdout
+  }
+
+  async stage(path: string, file?: string): Promise<GitActionResult> {
+    return this.mutate(path, stageArgv(file), 'Changes staged')
+  }
+
+  async unstage(path: string, file?: string): Promise<GitActionResult> {
+    return this.mutate(path, unstageArgv(file), 'Changes unstaged')
+  }
+
+  async discard(path: string, file: string): Promise<GitActionResult> {
+    return this.mutate(path, discardArgv(file), 'Working-tree change discarded')
+  }
+
+  async commit(path: string, message: string): Promise<GitActionResult> {
+    const trimmed = message.trim()
+    if (trimmed === '' || trimmed.length > 10_000) {
+      return { ok: false, error: { code: 'internal', message: 'commit message must contain 1..10000 characters' } }
+    }
+    return this.mutate(path, commitArgv(trimmed), 'Commit created')
+  }
+
+  async sync(path: string, action: 'fetch' | 'pull' | 'push', remote?: string): Promise<GitActionResult> {
+    const root = await this.allowedRoot(path)
+    if (root === null) return { ok: false, error: WORKSPACE_UNKNOWN }
+    let argv: string[]
+    if (action === 'fetch') {
+      const target = remote?.trim()
+      if (target === undefined || target === '') {
+        return { ok: false, error: { code: 'internal', message: 'fetch requires a configured remote' } }
+      }
+      const remotes = (await this.runner.run(remotesArgv(), root)).stdout.split('\n').map(value => value.trim())
+      if (!remotes.includes(target)) return { ok: false, error: { code: 'internal', message: `remote "${target}" is not configured` } }
+      argv = fetchArgv(target)
+    } else {
+      const upstream = await this.runner.run(upstreamArgv(), root)
+      if (upstream.exitCode !== 0) {
+        return { ok: false, error: { code: 'internal', message: 'the current branch has no upstream; configure it with git first' } }
+      }
+      argv = action === 'pull' ? pullArgv() : pushArgv()
+    }
+    return this.mutateRoot(root, argv, action === 'fetch' ? 'Fetch completed' : action === 'pull' ? 'Fast-forward pull completed' : 'Push completed', 120_000)
+  }
+
+  private async allowedRoot(path: string): Promise<string | null> {
+    const gated = await this.gate(path)
+    if (!gated.ok) return null
+    return this.repoRoot(gated.canonical)
+  }
+
+  private async mutate(path: string, argv: string[], message: string): Promise<GitActionResult> {
+    const root = await this.allowedRoot(path)
+    if (root === null) return { ok: false, error: WORKSPACE_UNKNOWN }
+    return this.mutateRoot(root, argv, message)
+  }
+
+  private async mutateRoot(root: string, argv: string[], message: string, timeoutMs?: number): Promise<GitActionResult> {
+    try {
+      const result = await this.runner.run(argv, root, timeoutMs)
+      if (result.exitCode === 0) return { ok: true, message }
+      return { ok: false, error: { code: 'internal', message: result.stderr.trim() || 'git operation failed' } }
+    } catch (error) {
+      return {
+        ok: false,
+        error: { code: 'internal', message: error instanceof Error ? error.message : String(error) },
+      }
     }
   }
 

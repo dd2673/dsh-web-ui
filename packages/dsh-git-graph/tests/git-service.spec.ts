@@ -63,6 +63,8 @@ describe('GitService', () => {
     repo = join(root, 'repo')
     await mkdir(repo)
     await git(repo, 'init', '-b', 'main')
+    await runner.run(['config', 'user.email', 'test@dsh.local'], repo)
+    await runner.run(['config', 'user.name', 'Test'], repo)
     await writeFile(join(repo, 'README.md'), 'hello\n')
     await git(repo, 'add', '.')
     await commit(repo, 'initial')
@@ -202,6 +204,59 @@ describe('GitService', () => {
     expect(view?.commits.some(commit => commit.refs.includes('main'))).toBe(true)
     expect(view?.commits.some(commit => commit.refs.includes('v1'))).toBe(true)
     expect(view?.hasMore).toBe(false)
+  })
+
+  it('stages, diffs, unstages, commits, and discards workspace changes', async () => {
+    const gitService = service()
+    await writeFile(join(repo, 'README.md'), 'changed\n')
+    await writeFile(join(repo, 'new file.txt'), 'new\n')
+    const initial = await gitService.workbench(repo)
+    expect(initial?.changes.map(change => [change.path, change.index, change.worktree])).toEqual([
+      ['README.md', ' ', 'M'],
+      ['new file.txt', '?', '?'],
+    ])
+    expect(await gitService.diff(repo, 'README.md', false)).toContain('-hello')
+    expect((await gitService.stage(repo, 'README.md')).ok).toBe(true)
+    expect((await gitService.unstage(repo, 'README.md')).ok).toBe(true)
+    expect((await gitService.stage(repo)).ok).toBe(true)
+    expect((await gitService.commit(repo, 'workbench commit')).ok).toBe(true)
+    expect((await gitService.workbench(repo))?.changes).toEqual([])
+
+    await writeFile(join(repo, 'README.md'), 'discard me\n')
+    expect((await gitService.discard(repo, 'README.md')).ok).toBe(true)
+    expect(await gitService.diff(repo, 'README.md', false)).toBe('')
+    expect((await gitService.commit(repo, '   ')).ok).toBe(false)
+  })
+
+  it('fetches, pulls fast-forward only, and pushes through a configured upstream', async () => {
+    const remote = join(root, 'remote.git')
+    const peer = join(root, 'peer')
+    await mkdir(remote)
+    await git(remote, 'init', '--bare')
+    await git(repo, 'remote', 'add', 'origin', remote)
+    await git(repo, 'push', '-u', 'origin', 'main')
+
+    const gitService = service()
+    const snapshot = await gitService.workbench(repo)
+    expect(snapshot?.upstream).toBe('origin/main')
+    expect(snapshot?.remotes).toEqual(['origin'])
+    expect((await gitService.sync(repo, 'fetch', 'origin')).ok).toBe(true)
+    expect((await gitService.sync(repo, 'fetch', 'missing')).ok).toBe(false)
+
+    await writeFile(join(repo, 'local.txt'), 'local\n')
+    await git(repo, 'add', 'local.txt')
+    await commit(repo, 'local push')
+    expect((await gitService.sync(repo, 'push')).ok).toBe(true)
+
+    await git(root, 'clone', remote, peer)
+    await runner.run(['config', 'user.email', 'peer@dsh.local'], peer)
+    await runner.run(['config', 'user.name', 'Peer'], peer)
+    await writeFile(join(peer, 'remote.txt'), 'remote\n')
+    await git(peer, 'add', 'remote.txt')
+    await commit(peer, 'remote update')
+    await git(peer, 'push')
+    expect((await gitService.sync(repo, 'pull')).ok).toBe(true)
+    expect((await gitService.workbench(repo))?.behind).toBe(0)
   })
 
   it('rejects mutation on a path outside the workspace registry', async () => {

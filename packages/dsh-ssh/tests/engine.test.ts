@@ -19,6 +19,7 @@ import { TestSshd } from './helpers/sshd.ts'
 let server: TestSshServer
 let store: HostStore
 let engine: SshEngine
+let trustedHostKey: string
 const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-engine-'))
 
 function addHost(alias: string, overrides: Partial<HostPayload> = {}): void {
@@ -27,7 +28,8 @@ function addHost(alias: string, overrides: Partial<HostPayload> = {}): void {
     host: '127.0.0.1',
     port: server.port,
     user: TEST_USER,
-    auth: { kind: 'password', password: TEST_PASSWORD },
+    auth: { kind: 'key', keyPath: server.keyPair.privateKey },
+    hostKeySha256: trustedHostKey,
     ...overrides,
   } as HostPayload)
 }
@@ -36,6 +38,15 @@ beforeAll(async () => {
   server = await TestSshServer.start()
   store = new HostStore(join(dir, 'hosts.json'))
   engine = new SshEngine(store, { idleTimeoutMs: 60_000, connectTimeoutMs: 5_000, defaultExecTimeoutMs: 5_000 })
+  store.create({
+    alias: 'trust-bootstrap',
+    host: '127.0.0.1',
+    port: server.port,
+    user: TEST_USER,
+    auth: { kind: 'key', keyPath: server.keyPair.privateKey },
+  })
+  trustedHostKey = await engine.scanHostKey('trust-bootstrap')
+  store.update('trust-bootstrap', { hostKeySha256: trustedHostKey })
 })
 
 afterAll(async () => {
@@ -46,7 +57,7 @@ afterAll(async () => {
 
 describe('exec', () => {
   it('runs a command and captures stdout', async () => {
-    addHost('exec-ok')
+    addHost('exec-ok', { auth: { kind: 'password', password: TEST_PASSWORD } })
     const result = await engine.exec('exec-ok', 'echo hello')
     expect(result.success).toBe(true)
     expect(result.exitCode).toBe(0)
@@ -84,6 +95,11 @@ describe('exec', () => {
   it('fails cleanly on authentication errors', async () => {
     addHost('exec-badauth', { auth: { kind: 'password', password: 'wrong' } })
     await expect(engine.exec('exec-badauth', 'true')).rejects.toThrow(/authentication/i)
+  })
+
+  it('blocks a changed server host key before authentication', async () => {
+    addHost('exec-bad-host-key', { hostKeySha256: `SHA256:${'0'.repeat(64)}` })
+    await expect(engine.exec('exec-bad-host-key', 'true')).rejects.toThrow()
   })
 })
 
@@ -186,7 +202,7 @@ describe('tunnel', () => {
 })
 
 describe('sftp (real sshd)', () => {
-  it('uploads, lists, and downloads files', async () => {
+  it.skipIf(process.platform === 'win32')('uploads, lists, and downloads files', async () => {
     const sshd = await TestSshd.start()
     try {
       store.create({
@@ -196,6 +212,8 @@ describe('sftp (real sshd)', () => {
         user: process.env.USER ?? 'root',
         auth: { kind: 'key', keyPath: sshd.clientKey },
       })
+      const fingerprint = await engine.scanHostKey('sftp-real')
+      store.update('sftp-real', { hostKeySha256: fingerprint })
       const remoteDir = join(sshd.root, 'up')
       const local = join(sshd.root, 'payload.txt')
       const content = 'sftp roundtrip payload ' + Math.random()

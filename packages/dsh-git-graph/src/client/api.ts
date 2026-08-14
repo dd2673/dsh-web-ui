@@ -6,7 +6,7 @@
  */
 
 import type {
-  BranchesView, GitError, GraphView, RepoStatus,
+  BranchesView, GitError, GraphView, RepoStatus, WorkbenchView,
 } from '../core/types.ts'
 
 /** One /git envelope response. */
@@ -65,6 +65,34 @@ export class GitApi {
   /** Topo-ordered commit graph across branches/tags/remotes. */
   graph(path: string, limit?: number): Promise<ApiResult<GraphView | null>> {
     return post('/git/graph', limit === undefined ? { path } : { path, limit })
+  }
+
+  workbench(path: string): Promise<ApiResult<WorkbenchView | null>> {
+    return post('/git/workbench', { path })
+  }
+
+  diff(path: string, file: string, staged: boolean): Promise<ApiResult<string | null>> {
+    return post('/git/diff', { path, file, staged })
+  }
+
+  stage(path: string, file?: string): Promise<ApiResult<{ message: string }>> {
+    return post('/git/stage', file === undefined ? { path } : { path, file })
+  }
+
+  unstage(path: string, file?: string): Promise<ApiResult<{ message: string }>> {
+    return post('/git/unstage', file === undefined ? { path } : { path, file })
+  }
+
+  discard(path: string, file: string): Promise<ApiResult<{ message: string }>> {
+    return post('/git/discard', { path, file })
+  }
+
+  commit(path: string, message: string): Promise<ApiResult<{ message: string }>> {
+    return post('/git/commit', { path, message })
+  }
+
+  sync(path: string, action: 'fetch' | 'pull' | 'push', remote?: string): Promise<ApiResult<{ message: string }>> {
+    return post('/git/sync', remote === undefined ? { path, action } : { path, action, remote })
   }
 }
 

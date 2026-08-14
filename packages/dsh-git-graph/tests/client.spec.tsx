@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Branch-chip behavior tests: the input selector context entry renders the
+ * Branch-chip behavior tests: the official composer input entry renders the
  * branch chip from the session baseline, non-repository workspaces (and
  * sessions without a cwd) hide it, blank (hero) sessions keep it mounted,
  * the popover searches/filters and marks the current branch, the footer
@@ -11,7 +11,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
-import type { BranchesView, GraphView, RepoStatus, SwitchResult } from '../src/core/types.ts'
+import type { BranchesView, GraphView, RepoStatus, SwitchResult, WorkbenchView } from '../src/core/types.ts'
 import type { GitGraphInjected } from '../src/client/index.ts'
 import type { BranchChipProps } from '../src/client/chips/BranchChip.tsx'
 import { BranchChip } from '../src/client/chips/BranchChip.tsx'
@@ -42,6 +42,7 @@ interface BenchOptions {
   switchResult?: SwitchResult
   createResult?: SwitchResult
   graphView?: GraphView | null
+  workbenchView?: WorkbenchView | null
   /** Override the graph verb (e.g. a deferred promise for the loading state). */
   graph?: (limit?: number) => Promise<GraphView | null>
 }
@@ -65,7 +66,8 @@ function bench(options: BenchOptions = {}) {
     : options.branchesView
 
   const calls: Record<string, unknown[]> = {
-    repoStatus: [], branches: [], switchBranch: [], createBranch: [], graph: [],
+    repoStatus: [], branches: [], switchBranch: [], createBranch: [], graph: [], workbench: [],
+    diff: [], stage: [], unstage: [], discard: [], commit: [], sync: [],
     subscribeChanges: [],
   }
   const record = <K extends keyof typeof calls>(key: K, ...args: unknown[]): void => {
@@ -89,14 +91,23 @@ function bench(options: BenchOptions = {}) {
       record('graph', sessionId, limit)
       return options.graph !== undefined ? options.graph(limit) : options.graphView ?? null
     }),
+    workbench: vi.fn(async (sessionId: SessionId | undefined) => {
+      record('workbench', sessionId)
+      return options.workbenchView ?? { root: '/ws/proj', branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, remotes: ['origin'], changes: [] }
+    }),
+    diff: vi.fn(async (sessionId: SessionId | undefined, file: string, staged: boolean) => { record('diff', sessionId, file, staged); return '' }),
+    stage: vi.fn(async (sessionId: SessionId | undefined, file?: string) => { record('stage', sessionId, file); return { ok: true, message: 'staged' } }),
+    unstage: vi.fn(async (sessionId: SessionId | undefined, file?: string) => { record('unstage', sessionId, file); return { ok: true, message: 'unstaged' } }),
+    discard: vi.fn(async (sessionId: SessionId | undefined, file: string) => { record('discard', sessionId, file); return { ok: true, message: 'discarded' } }),
+    commit: vi.fn(async (sessionId: SessionId | undefined, message: string) => { record('commit', sessionId, message); return { ok: true, message: 'committed' } }),
+    sync: vi.fn(async (sessionId: SessionId | undefined, action: 'fetch' | 'pull' | 'push', remote?: string) => { record('sync', sessionId, action, remote); return { ok: true, message: action } }),
     subscribeChanges: vi.fn((sessionId: SessionId | undefined, _onChange: () => void) => { record('subscribeChanges', sessionId); return () => {} }),
   }
 
   const props: BranchChipProps = {
     sessionId,
-    // The selector-context hole has an empty owner share: the chip derives
-    // its state from the standard session-maybe kit + the inject face, never
-    // from the conversation snapshot or live input state.
+    session: {} as never,
+    input: {} as never,
     useSession: (() => undefined) as never,
     useSessions: ((selector: (state: { byId: Record<string, { cwd?: string; blank?: boolean }> }) => unknown) =>
       selector({ byId: { [sessionId]: { cwd, blank: options.blank === true } } })) as never,
@@ -201,8 +212,10 @@ describe('BranchChip', () => {
     }
     const { calls } = bench({ graphView })
     fireEvent.click(await screen.findByRole('button', { name: '分支' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Git 图谱' }))
-    const dialog = await screen.findByRole('dialog', { name: 'Git 图谱' })
+    fireEvent.click(await screen.findByRole('button', { name: '打开 Git 工作台' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Git 工作台' })
+    fireEvent.click(screen.getByRole('button', { name: '历史与图谱' }))
+    await screen.findByText('merge work')
     expect(dialog.textContent).toContain('merge work')
     expect(dialog.textContent).toContain('2 个提交')
     expect(calls.graph).toEqual([['sess-1', 200]])
@@ -219,7 +232,8 @@ describe('BranchChip', () => {
       graph: () => new Promise<GraphView>((resolve) => { resolveGraph = resolve }),
     })
     fireEvent.click(await screen.findByRole('button', { name: '分支' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Git 图谱' }))
+    fireEvent.click(await screen.findByRole('button', { name: '打开 Git 工作台' }))
+    fireEvent.click(screen.getByRole('button', { name: '历史与图谱' }))
     expect(await screen.findByText('加载中…')).toBeTruthy()
     resolveGraph({
       root: '/ws/proj', branch: 'main',

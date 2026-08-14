@@ -74,6 +74,10 @@ class StubEngine {
   async test(): Promise<{ ok: boolean }> {
     return { ok: true }
   }
+  invalidate(): void {}
+  async scanHostKey(): Promise<string> {
+    return 'SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+  }
 }
 
 const engine = (stub: StubEngine): SshEngine => stub as unknown as SshEngine

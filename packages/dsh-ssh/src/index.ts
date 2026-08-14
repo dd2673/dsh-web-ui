@@ -41,11 +41,17 @@ export interface Config {
   announceToAgent?: boolean
   /** Master switch for the plugin (routes, tools, prompt section). */
   enabled?: boolean
+  /**
+   * Optional host-store JSON path, sampled at plugin startup. Dedicated DSH
+   * profiles should use separate files and restart after changing this value.
+   */
+  storeFile?: string
 }
 
 export const Config: z<Config> = z.object({
   announceToAgent: z.boolean().default(true),
   enabled: z.boolean().default(true),
+  storeFile: z.string(),
 })
 
 /** Schema default, re-read for hand-built test contexts (the loader applies them normally). */
@@ -55,7 +61,7 @@ const DEFAULT_ANNOUNCE = true
 const SECTION_ORDER = 150
 
 /** Model-facing announcement: plugin presence, capabilities, and limits. */
-export const SSH_GUIDANCE = '本机已安装 dsh-ssh 插件（DSH 远程 SSH 运维）：侧边栏「SSH」入口；在 dsh-web-ui 插件全家桶仓库（packages/dsh-ssh）统一维护。能力：主机配置存 ~/.dsh/dsh-ssh.json（可从 ~/.ssh/config 导入）；持久连接池复用长连接（空闲 30 分钟自动断开）；ssh_list 列出主机、ssh_exec 执行远程命令、ssh_upload/ssh_download 传输文件、ssh_tunnel 本地端口转发（访问远程数据库/内网服务）、ssh_cluster 集群并发执行；支持密钥/密码认证、passphrase 密钥与 ProxyJump 跳板机；Web 终端走 WebSocket。限制：主机操作由用户在 GUI 中配置后 agent 方可使用；密码以明文存在用户主目录私有文件（权限 0600）；命令输出原样返回、可能含敏感信息；断线重连可能重放非幂等命令；传输/执行消耗真实远程资源，先确认再操作。用户提到「SSH / 远程服务器 / 服务器操作 / 跳板机 / 隧道 / 部署 / 上传下载」时即指本插件，请据此协作。'
+export const SSH_GUIDANCE = '本机已安装 dsh-wending-ssh-manager 插件：侧边栏「SSH」入口；同一 IP 可按不同 alias 管理多个账号。能力：主机配置存在插件配置的 storeFile（未配置时为 ~/.dsh/dsh-ssh.json，可从 ~/.ssh/config 导入）；Windows 密码和密钥口令使用当前用户 DPAPI 加密；首次连接必须在 GUI 验证并固定服务器 Host Key；持久连接池空闲 30 分钟自动断开；ssh_list 列出主机、ssh_exec 执行远程命令、ssh_upload/ssh_download 传输文件、ssh_tunnel 本地端口转发、ssh_cluster 集群并发执行；支持密钥/密码认证、passphrase 密钥与 ProxyJump。限制：已开始的远程命令断线后不会自动重放；命令输出原样返回、可能含敏感信息；传输/执行消耗真实远程资源，先确认再操作。用户提到「SSH / 远程服务器 / 服务器操作 / 跳板机 / 隧道 / 部署 / 上传下载」时即指本插件。'
 
 /**
  * Mount the SSH engine, routes, tools, and announcement.
@@ -74,7 +80,10 @@ export function apply(ctx: Context, config?: Config): void {
     }
   }
 
-  const store = new HostStore()
+  // Keep profile stores physically separate. The path is startup-only because
+  // switching it underneath pooled clients could cross account boundaries.
+  const configuredStore = config?.storeFile?.trim()
+  const store = new HostStore(configuredStore === '' ? undefined : configuredStore)
   const engine = new SshEngine(store)
   ctx.effect(() => () => { engine.dispose() }, 'dsh-ssh: engine')
 

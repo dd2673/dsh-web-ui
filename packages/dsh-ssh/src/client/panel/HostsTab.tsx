@@ -26,6 +26,7 @@ export function HostsTab({ api, onConnect }: HostsTabProps) {
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [testingAlias, setTestingAlias] = useState<string | null>(null)
+  const [trustingAlias, setTrustingAlias] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [importing, setImporting] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -65,6 +66,22 @@ export function HostsTab({ api, onConnect }: HostsTabProps) {
       setTestResults(prev => ({ ...prev, [alias]: { ok: false, error: errorMessage(cause) } }))
     } finally {
       setTestingAlias(null)
+    }
+  }
+
+  const trustHostKey = async (alias: string): Promise<void> => {
+    setTrustingAlias(alias)
+    setError(null)
+    try {
+      const fingerprint = await api.scanHostKey(alias)
+      if (!window.confirm(tt('hosts.trustConfirm', { alias, fingerprint }))) return
+      await api.trustHostKey(alias, fingerprint)
+      setNotice(tt('hosts.trustOk', { alias, fingerprint }))
+      void load()
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setTrustingAlias(null)
     }
   }
 
@@ -135,6 +152,12 @@ export function HostsTab({ api, onConnect }: HostsTabProps) {
                         <button type="button" className={css.linkButton} disabled={testingAlias === host.alias} onClick={() => { void runTest(host.alias) }}>
                           {testingAlias === host.alias ? tt('hosts.testing') : tt('hosts.test')}
                         </button>
+                        <button type="button" className={css.linkButton} disabled={trustingAlias === host.alias} onClick={() => { void trustHostKey(host.alias) }}>
+                          {trustingAlias === host.alias
+                            ? tt('hosts.scanningKey')
+                            : host.hostKeySha256 === undefined ? tt('hosts.trustKey') : tt('hosts.refreshKey')}
+                        </button>
+                        {host.hostKeySha256 !== undefined && <span className={css.inlineTest} data-status="ok" title={host.hostKeySha256}>{tt('hosts.keyTrusted')}</span>}
                         {testingAlias === host.alias && <span className={css.spinner} aria-hidden="true" />}
                         {test !== undefined && (
                           <span className={css.inlineTest} data-status={test.ok ? 'ok' : 'fail'}>
