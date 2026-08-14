@@ -165,6 +165,7 @@ export class SshApi {
     tags?: string[]
     timeoutMs?: number
     maxWorkers?: number
+    allowDuplicateHosts?: boolean
   }): Promise<ClusterResult[]> {
     const response = await fetch(SSH_API.cluster, {
       method: 'POST',

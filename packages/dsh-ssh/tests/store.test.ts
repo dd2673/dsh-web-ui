@@ -74,7 +74,22 @@ describe('CRUD', () => {
     expect(store.find('web-01')?.host).toBe('192.168.1.10')
     const summary = store.summarize(entry)
     expect(summary.auth).toBe('password')
+    expect(summary.credentialReady).toBe(true)
+    expect(summary.keyReady).toBeUndefined()
+    expect(summary.secretProtection).toBe(process.platform === 'win32' ? 'dpapi-current-user' : 'file-0600')
+    expect(summary.hostKeyPinned).toBe(false)
+    expect(summary.nodeId).toBe('192.168.1.10:22')
+    expect(summary.sameHostAliases).toEqual(['web-01'])
     expect('password' in summary).toBe(false)
+  })
+
+  it('groups aliases for the same physical SSH endpoint without conflating accounts', () => {
+    const store = makeStore()
+    const root = store.create(basePayload)
+    store.create({ ...basePayload, alias: 'web-deploy', user: 'deploy' })
+    const summary = store.summarize(root)
+    expect(summary.sameHostAliases).toEqual(['web-01', 'web-deploy'])
+    expect(summary.nodeId).toBe('192.168.1.10:22')
   })
 
   it('rejects duplicate and invalid aliases', () => {
@@ -198,6 +213,23 @@ describe('file safety', () => {
       expect(persisted).toContain('dpapi:v1:')
     }
     expect(store.find('web-01')?.auth.password).toBe('not-in-file')
+  })
+
+  it('reports the actual at-rest state of a legacy plaintext credential', () => {
+    const store = makeStore()
+    writeFileSync(store.path, JSON.stringify({
+      version: 1,
+      hosts: [{
+        ...basePayload,
+        port: 22,
+        proxyJump: [],
+        tags: [],
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+    }), 'utf8')
+    const entry = store.list()[0]!
+    expect(store.summarize(entry).secretProtection).toBe(process.platform === 'win32' ? 'legacy-plaintext' : 'file-0600')
   })
 
   it('renames a corrupt store aside instead of silently overwriting it', () => {

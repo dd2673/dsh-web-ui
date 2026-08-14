@@ -11,6 +11,18 @@ import { spawnSync } from 'node:child_process'
 
 const DPAPI_PREFIX = 'dpapi:v1:'
 
+export type SecretProtection = 'dpapi-current-user' | 'file-0600' | 'legacy-plaintext' | 'none'
+
+/** Report the actual persisted protection of the supplied password/passphrase fields. */
+export function persistedSecretProtection(...values: Array<string | undefined>): SecretProtection {
+  const secrets = values.filter((value): value is string => value !== undefined && value !== '')
+  if (secrets.length === 0) return 'none'
+  const dpapiCount = secrets.filter(value => value.startsWith(DPAPI_PREFIX)).length
+  if (dpapiCount === secrets.length) return 'dpapi-current-user'
+  if (process.platform === 'win32') return 'legacy-plaintext'
+  return 'file-0600'
+}
+
 const PROTECT_SCRIPT = [
   '$value=[Console]::In.ReadToEnd()',
   '$bytes=[Text.Encoding]::UTF8.GetBytes($value)',

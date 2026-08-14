@@ -6,8 +6,9 @@
  */
 
 import { createServer, type Server as NetServer, type Socket } from 'node:net'
-import { existsSync, mkdirSync, readFileSync, statSync, readdirSync } from 'node:fs'
-import { dirname, join, relative, resolve as resolvePath } from 'node:path'
+import { existsSync, lstatSync, mkdirSync, readFileSync, statSync, readdirSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'node:path'
+import { posix as posixPath } from 'node:path'
 import { Client, type ClientChannel, type ConnectConfig } from 'ssh2'
 import type { ClusterResult, ExecResult, SshHostEntry, SshHostSummary, TestResult, TransferProgress, TunnelInfo } from './protocol.ts'
 import { expandHome, type HostStore } from './store.ts'
@@ -20,7 +21,7 @@ export interface EngineOptions {
   connectTimeoutMs?: number
   /** Keepalive ping interval (ms). */
   keepaliveIntervalMs?: number
-  /** Cap on captured stdout/stderr bytes per exec (ms). */
+  /** Cap on captured stdout/stderr bytes per exec. */
   maxOutputBytes?: number
   /** Default exec timeout (ms). */
   defaultExecTimeoutMs?: number
@@ -77,6 +78,31 @@ interface TunnelRecord {
   sockets: Set<Socket>
   client: Client
   hops: Client[]
+}
+
+/** Cluster selection and execution options. */
+export interface ClusterOptions {
+  command: string
+  aliases?: string[]
+  environment?: string
+  tags?: string[]
+  timeoutMs?: number
+  maxWorkers?: number
+  /** Required to intentionally run multiple account aliases on one endpoint. */
+  allowDuplicateHosts?: boolean
+}
+
+/** Bounded recursive directory-download options. */
+export interface DirectoryDownloadOptions {
+  maxFiles?: number
+  maxBytes?: number
+  overwrite?: boolean
+}
+
+/** Optional Agent-side limits for a recursive local upload. */
+export interface UploadLimits {
+  maxFiles?: number
+  maxBytes?: number
 }
 
 /** Normalize ssh2's SHA-256 digest for storage and display. */
@@ -147,18 +173,34 @@ function connectClient(config: ConnectConfig): Promise<Client> {
   })
 }
 
-/** Cap captured output at the configured byte budget (marks truncation). */
-function appendOutput(target: { text: string; truncated: boolean }, chunk: Buffer, maxBytes: number): void {
-  if (target.truncated) return
-  if (target.text.length + chunk.length > maxBytes) {
-    let cut = chunk.toString('utf8').slice(0, maxBytes - target.text.length)
-    // Never split a surrogate pair at the cut boundary.
-    if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1)
-    target.text += cut + '…[output truncated]'
-    target.truncated = true
-    return
+interface OutputCapture {
+  chunks: Buffer[]
+  capturedBytes: number
+  totalBytes: number
+  truncated: boolean
+}
+
+function newOutputCapture(): OutputCapture {
+  return { chunks: [], capturedBytes: 0, totalBytes: 0, truncated: false }
+}
+
+/** Cap captured output by Buffer bytes while continuing to count omitted data. */
+function appendOutput(target: OutputCapture, chunk: Buffer, maxBytes: number): void {
+  target.totalBytes += chunk.length
+  const remaining = Math.max(0, maxBytes - target.capturedBytes)
+  if (remaining > 0) {
+    const kept = chunk.subarray(0, remaining)
+    target.chunks.push(Buffer.from(kept))
+    target.capturedBytes += kept.length
   }
-  target.text += chunk.toString('utf8')
+  if (chunk.length > remaining) target.truncated = true
+}
+
+/** Decode a byte-capped UTF-8 capture without leaving a partial code point. */
+function finishOutput(target: OutputCapture): string {
+  let decoded = Buffer.concat(target.chunks).toString('utf8')
+  if (target.truncated) decoded = decoded.replace(/\uFFFD$/, '') + '...[output truncated]'
+  return decoded
 }
 
 /** Walk a local directory, collecting relative paths of every file. */
@@ -167,9 +209,11 @@ function walkLocalDir(root: string): string[] {
   const visit = (dir: string): void => {
     for (const name of readdirSync(dir)) {
       const full = join(dir, name)
-      const stat = statSync(full)
+      const stat = lstatSync(full)
       if (stat.isDirectory()) visit(full)
       else if (stat.isFile()) files.push(relative(root, full))
+      // Symlinks and special nodes are intentionally skipped: following a
+      // symlink could upload data outside the caller-selected tree.
     }
   }
   visit(root)
@@ -357,6 +401,10 @@ export class SshEngine {
 
   /** Run one command on `alias` (reusing the pooled connection). */
   async exec(alias: string, command: string, timeoutMs?: number): Promise<ExecResult> {
+    if (command.trim() === '') throw new Error('command must not be empty')
+    if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 3_600_000)) {
+      throw new Error('timeoutMs must be an integer in 100..3600000')
+    }
     const started = Date.now()
     const budget = timeoutMs !== undefined && timeoutMs > 0 ? timeoutMs : this.opts.defaultExecTimeoutMs
     return this.withClient(alias, async (client) => {
@@ -366,8 +414,8 @@ export class SshEngine {
             reject(error)
             return
           }
-          const stdout = { text: '', truncated: false }
-          const stderr = { text: '', truncated: false }
+          const stdout = newOutputCapture()
+          const stderr = newOutputCapture()
           let timedOut = false
           let settled = false
           const finish = (): void => {
@@ -378,8 +426,12 @@ export class SshEngine {
               success: false,
               exitCode: null,
               timedOut,
-              stdout: stdout.text,
-              stderr: stderr.text,
+              stdout: finishOutput(stdout),
+              stderr: finishOutput(stderr),
+              stdoutBytes: stdout.totalBytes,
+              stderrBytes: stderr.totalBytes,
+              stdoutTruncated: stdout.truncated,
+              stderrTruncated: stderr.truncated,
               durationMs: Date.now() - started,
               error: timedOut ? `command timed out after ${budget} ms` : undefined,
             })
@@ -402,16 +454,23 @@ export class SshEngine {
               success: code === 0 && !timedOut,
               exitCode: code,
               timedOut,
-              stdout: stdout.text,
-              stderr: stderr.text,
+              stdout: finishOutput(stdout),
+              stderr: finishOutput(stderr),
+              stdoutBytes: stdout.totalBytes,
+              stderrBytes: stderr.totalBytes,
+              stdoutTruncated: stdout.truncated,
+              stderrTruncated: stderr.truncated,
               durationMs: Date.now() - started,
+              ...(code === null && !timedOut
+                ? { error: 'remote command ended without an exit status; remote state is unknown and the command was not replayed' }
+                : {}),
             })
           })
           stream.on('error', (streamError: Error) => {
             if (settled) return
             settled = true
             clearTimeout(timer)
-            reject(streamError)
+            reject(new Error(`SSH channel failed after the remote command started; remote state is unknown and the command was not replayed: ${streamError.message}`))
           })
         })
       })
@@ -419,14 +478,8 @@ export class SshEngine {
   }
 
   /** Run one command against many hosts concurrently. */
-  async cluster(options: {
-    command: string
-    aliases?: string[]
-    environment?: string
-    tags?: string[]
-    timeoutMs?: number
-    maxWorkers?: number
-  }): Promise<ClusterResult[]> {
+  /** Resolve cluster filters without opening a connection (used by dry-run). */
+  clusterTargets(options: Omit<ClusterOptions, 'command'> | ClusterOptions): SshHostSummary[] {
     let targets = this.store.list()
     if (options.aliases !== undefined && options.aliases.length > 0) {
       targets = targets.filter(entry => options.aliases!.includes(entry.alias))
@@ -438,19 +491,50 @@ export class SshEngine {
       // ALL semantics (matches the ssh_cluster tool description).
       targets = targets.filter(entry => options.tags!.every(tag => entry.tags.includes(tag)))
     }
-    if (targets.length === 0) return []
+    return targets.map(entry => this.store.summarize(entry))
+  }
+
+  /** Run a command on the selected aliases, failing closed on duplicate endpoints. */
+  async cluster(options: ClusterOptions): Promise<ClusterResult[]> {
+    if (options.command.trim() === '') throw new Error('command must not be empty')
     if (options.maxWorkers !== undefined && (!Number.isInteger(options.maxWorkers) || options.maxWorkers < 1)) {
       throw new Error('maxWorkers must be a positive integer')
     }
-    const workers = Math.min(this.opts.defaultMaxWorkers, options.maxWorkers ?? this.opts.defaultMaxWorkers, targets.length)
+    const targetSummaries = this.clusterTargets(options)
+    if (targetSummaries.length === 0) return []
+    const duplicateGroups = new Map<string, string[]>()
+    for (const target of targetSummaries) {
+      const aliases = duplicateGroups.get(target.nodeId) ?? []
+      aliases.push(target.alias)
+      duplicateGroups.set(target.nodeId, aliases)
+    }
+    const duplicates = [...duplicateGroups.entries()].filter(([, aliases]) => aliases.length > 1)
+    if (duplicates.length > 0 && options.allowDuplicateHosts !== true) {
+      const detail = duplicates.map(([node, aliases]) => `${node} (${aliases.join(', ')})`).join('; ')
+      throw new Error(`multiple aliases match the same SSH endpoint: ${detail}; choose one alias per endpoint or set allowDuplicateHosts=true intentionally`)
+    }
+    const workers = Math.min(this.opts.defaultMaxWorkers, options.maxWorkers ?? this.opts.defaultMaxWorkers, targetSummaries.length)
     const results: ClusterResult[] = []
-    const queue = [...targets]
+    const queue = [...targetSummaries]
     const run = async (): Promise<void> => {
       while (queue.length > 0) {
         const entry = queue.shift()!
         try {
           const result = await this.exec(entry.alias, options.command, options.timeoutMs)
-          results.push({ alias: entry.alias, ok: result.success, exitCode: result.exitCode, timedOut: result.timedOut, stdout: result.stdout, stderr: result.stderr, durationMs: result.durationMs })
+          results.push({
+            alias: entry.alias,
+            ok: result.success,
+            exitCode: result.exitCode,
+            timedOut: result.timedOut,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            stdoutBytes: result.stdoutBytes,
+            stderrBytes: result.stderrBytes,
+            stdoutTruncated: result.stdoutTruncated,
+            stderrTruncated: result.stderrTruncated,
+            durationMs: result.durationMs,
+            ...(result.error !== undefined ? { error: result.error } : {}),
+          })
         } catch (error) {
           results.push({ alias: entry.alias, ok: false, error: error instanceof Error ? error.message : String(error) })
         }
@@ -552,6 +636,30 @@ export class SshEngine {
     }
   }
 
+  /** Scan and compare the live server key with the stored pin. */
+  async inspectHostKey(alias: string): Promise<{ alias: string; pinned?: string; scanned: string; matches: boolean }> {
+    const entry = this.store.find(alias)
+    if (entry === undefined) throw new Error(`alias '${alias}' not found — add it first`)
+    const scanned = await this.scanHostKey(alias)
+    return {
+      alias,
+      ...(entry.hostKeySha256 !== undefined ? { pinned: entry.hostKeySha256 } : {}),
+      scanned,
+      matches: entry.hostKeySha256 === scanned,
+    }
+  }
+
+  /** Rotate a pin only when the caller echoes the freshly observed fingerprint. */
+  async trustHostKey(alias: string, expectedFingerprint: string): Promise<{ alias: string; pinned: string; scanned: string; matches: true }> {
+    const scanned = await this.scanHostKey(alias)
+    if (scanned !== expectedFingerprint) {
+      throw new Error(`server host key changed before trust was committed (expected ${expectedFingerprint}, scanned ${scanned})`)
+    }
+    this.store.update(alias, { hostKeySha256: scanned })
+    this.invalidate(alias)
+    return { alias, pinned: scanned, scanned, matches: true }
+  }
+
   /** Drop cached state after host configuration or trust changes. */
   invalidate(alias?: string): void {
     this.stopAllTunnels(alias)
@@ -564,42 +672,109 @@ export class SshEngine {
 
   // -------------------------------------------------------------- sftp
 
+  private remoteExists(sftp: import('ssh2').SFTPWrapper, remotePath: string): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+      sftp.stat(remotePath, (error) => {
+        if (error === undefined) {
+          resolve(true)
+          return
+        }
+        const code = (error as Error & { code?: number | string }).code
+        if (code === 2 || code === 'ENOENT') {
+          resolve(false)
+          return
+        }
+        reject(error)
+      })
+    })
+  }
+
+  private remoteStat(sftp: import('ssh2').SFTPWrapper, remotePath: string): Promise<{ isDirectory: () => boolean }> {
+    return new Promise((resolve, reject) => {
+      sftp.stat(remotePath, (error, stats) => error !== undefined ? reject(error) : resolve(stats))
+    })
+  }
+
+  private remoteReadDir(sftp: import('ssh2').SFTPWrapper, remotePath: string): Promise<Array<{
+    filename: string
+    attrs: { isDirectory: () => boolean; isFile: () => boolean; size: number }
+  }>> {
+    return new Promise((resolve, reject) => {
+      sftp.readdir(remotePath, (error, entries) => error !== undefined ? reject(error) : resolve(entries))
+    })
+  }
+
   /** Upload one local file (or directory tree) to a remote path. */
-  async upload(alias: string, localPath: string, remotePath: string, recursive: boolean, onProgress?: (progress: TransferProgress) => void): Promise<{ bytes: number; files: number }> {
+  async upload(
+    alias: string,
+    localPath: string,
+    remotePath: string,
+    recursive: boolean,
+    onProgress?: (progress: TransferProgress) => void,
+    overwrite = true,
+    limits?: UploadLimits,
+  ): Promise<{ bytes: number; files: number }> {
     // Remote paths must be absolute: the mkdir chain and fastPut must agree
     // on one resolution (relative paths previously created dirs at the root).
     if (!remotePath.startsWith('/')) {
       throw new Error(`remotePath must be an absolute path (got '${remotePath}')`)
     }
+    if (!isAbsolute(localPath)) throw new Error(`localPath must be absolute (got '${localPath}')`)
+    if (limits?.maxFiles !== undefined && (!Number.isInteger(limits.maxFiles) || limits.maxFiles < 1 || limits.maxFiles > 10_000)) {
+      throw new Error('maxFiles must be an integer in 1..10000')
+    }
+    if (limits?.maxBytes !== undefined && (!Number.isSafeInteger(limits.maxBytes) || limits.maxBytes < 1 || limits.maxBytes > 8 * 1024 * 1024 * 1024)) {
+      throw new Error('maxBytes must be in 1..8589934592')
+    }
     const local = resolvePath(localPath)
     if (!existsSync(local)) throw new Error(`local path not found: '${localPath}'`)
     return this.withClient(alias, async (client) => {
       const sftp = await this.sftp(client)
-      const stat = statSync(local)
+      const stat = lstatSync(local)
+      if (!stat.isDirectory() && !stat.isFile()) {
+        throw new Error(`local path must be a regular file or directory (symlinks and special nodes are not followed): '${localPath}'`)
+      }
       let files: string[]
       if (stat.isDirectory()) {
         if (!recursive) throw new Error(`'${localPath}' is a directory — enable recursive upload`)
         files = walkLocalDir(local)
-        await this.ensureRemoteDir(sftp, remotePath)
       } else {
         files = ['']
-        await this.ensureRemoteDir(sftp, dirname(remotePath))
       }
-      let bytes = 0
-      for (const rel of files) {
+      const manifest = files.map((rel) => {
         const src = rel === '' ? local : join(local, rel)
-        // Remote paths always use forward slashes; normalize any OS separators.
         const remoteRel = rel.split(/[\\/]/).join('/')
         const dst = rel === '' ? remotePath : remotePath.replace(/\/$/, '') + '/' + remoteRel
-        await this.fastPut(sftp, src, dst, onProgress)
-        bytes += statSync(src).size
+        return { src, dst, size: statSync(src).size }
+      })
+      const bytes = manifest.reduce((total, file) => total + file.size, 0)
+      if (limits?.maxFiles !== undefined && manifest.length > limits.maxFiles) throw new Error(`upload exceeds maxFiles (${String(limits.maxFiles)})`)
+      if (limits?.maxBytes !== undefined && bytes > limits.maxBytes) throw new Error(`upload exceeds maxBytes (${String(limits.maxBytes)})`)
+      if (!overwrite) {
+        for (const file of manifest) {
+          if (await this.remoteExists(sftp, file.dst)) {
+            throw new Error(`remote destination already exists: '${file.dst}' (set overwrite=true only after confirming replacement)`)
+          }
+        }
       }
-      return { bytes, files: files.length }
+      for (const file of manifest) {
+        await this.ensureRemoteDir(sftp, posixPath.dirname(file.dst))
+        await this.fastPut(sftp, file.src, file.dst, onProgress)
+      }
+      return { bytes, files: manifest.length }
     })
   }
 
   /** Download one remote file to a local path. */
-  async download(alias: string, remotePath: string, localPath: string, onProgress?: (progress: TransferProgress) => void): Promise<{ bytes: number }> {
+  async download(
+    alias: string,
+    remotePath: string,
+    localPath: string,
+    onProgress?: (progress: TransferProgress) => void,
+    overwrite = true,
+  ): Promise<{ bytes: number }> {
+    if (!remotePath.startsWith('/')) throw new Error(`remotePath must be absolute (got '${remotePath}')`)
+    if (!isAbsolute(localPath)) throw new Error(`localPath must be absolute (got '${localPath}')`)
     return this.withClient(alias, async (client) => {
       const sftp = await this.sftp(client)
       const stat = await new Promise<{ isDirectory: () => boolean }>((resolve, reject) => {
@@ -609,9 +784,80 @@ export class SshEngine {
         throw new Error(`'${remotePath}' is a directory — directory download is not supported yet (download individual files)`)
       }
       const local = resolvePath(localPath)
+      if (!overwrite && existsSync(local)) {
+        throw new Error(`local destination already exists: '${local}' (set overwrite=true only after confirming replacement)`)
+      }
       if (!existsSync(dirname(local))) mkdirSync(dirname(local), { recursive: true })
       await this.fastGet(sftp, remotePath, local, onProgress)
       return { bytes: statSync(local).size }
+    })
+  }
+
+  /** Download a remote directory tree with count/size caps and no symlink following. */
+  async downloadDirectory(
+    alias: string,
+    remotePath: string,
+    localPath: string,
+    options: DirectoryDownloadOptions = {},
+    onProgress?: (progress: TransferProgress) => void,
+  ): Promise<{ bytes: number; files: number }> {
+    if (!remotePath.startsWith('/')) throw new Error(`remotePath must be absolute (got '${remotePath}')`)
+    if (!isAbsolute(localPath)) throw new Error(`localPath must be absolute (got '${localPath}')`)
+    const maxFiles = options.maxFiles ?? 500
+    const maxBytes = options.maxBytes ?? 512 * 1024 * 1024
+    if (!Number.isInteger(maxFiles) || maxFiles < 1 || maxFiles > 10_000) throw new Error('maxFiles must be an integer in 1..10000')
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 8 * 1024 * 1024 * 1024) throw new Error('maxBytes must be in 1..8589934592')
+    const root = resolvePath(localPath)
+    return this.withClient(alias, async (client) => {
+      const sftp = await this.sftp(client)
+      const rootStat = await this.remoteStat(sftp, remotePath)
+      if (!rootStat.isDirectory()) throw new Error(`'${remotePath}' is not a directory`)
+      const files: Array<{ remote: string; relative: string; size: number }> = []
+      let bytes = 0
+      let entriesSeen = 0
+      const maxEntries = Math.min(40_000, Math.max(1_000, maxFiles * 4))
+      const visit = async (remoteDir: string, relativeDir: string): Promise<void> => {
+        const entries = await this.remoteReadDir(sftp, remoteDir)
+        for (const entry of entries) {
+          entriesSeen += 1
+          if (entriesSeen > maxEntries) throw new Error(`directory traversal exceeds safety cap (${String(maxEntries)} entries)`)
+          if (entry.filename === '.' || entry.filename === '..' || entry.filename.includes('/') || entry.filename.includes('\\')) {
+            throw new Error(`unsafe remote directory entry: '${entry.filename}'`)
+          }
+          const remote = posixPath.join(remoteDir, entry.filename)
+          const relativeName = relativeDir === '' ? entry.filename : posixPath.join(relativeDir, entry.filename)
+          if (entry.attrs.isDirectory()) {
+            await visit(remote, relativeName)
+          } else if (entry.attrs.isFile()) {
+            files.push({ remote, relative: relativeName, size: entry.attrs.size })
+            bytes += entry.attrs.size
+            if (files.length > maxFiles) throw new Error(`directory download exceeds maxFiles (${String(maxFiles)})`)
+            if (bytes > maxBytes) throw new Error(`directory download exceeds maxBytes (${String(maxBytes)})`)
+          }
+          // Symlinks and special nodes are intentionally skipped.
+        }
+      }
+      await visit(remotePath, '')
+      const manifest = files.map((file) => {
+        const local = resolvePath(root, ...file.relative.split('/'))
+        if (local !== root && !local.startsWith(root.endsWith(sep) ? root : root + sep)) {
+          throw new Error(`download destination escaped local root: '${file.relative}'`)
+        }
+        return { ...file, local }
+      })
+      if (options.overwrite !== true) {
+        for (const file of manifest) {
+          if (existsSync(file.local)) {
+            throw new Error(`local destination already exists: '${file.local}' (set overwrite=true only after confirming replacement)`)
+          }
+        }
+      }
+      for (const file of manifest) {
+        const local = file.local
+        mkdirSync(dirname(local), { recursive: true })
+        await this.fastGet(sftp, file.remote, local, onProgress)
+      }
+      return { bytes, files: files.length }
     })
   }
 

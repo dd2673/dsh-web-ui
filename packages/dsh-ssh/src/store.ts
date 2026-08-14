@@ -10,8 +10,11 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import ssh2 from 'ssh2'
 import type { HostPayload, ImportResult, SshHostEntry, SshHostSummary } from './protocol.ts'
-import { protectSecret, unprotectSecret } from './secret-protection.ts'
+import { persistedSecretProtection, protectSecret, unprotectSecret, type SecretProtection } from './secret-protection.ts'
+
+const ssh2Utils = ssh2.utils
 
 /** File format version. */
 const FORMAT_VERSION = 1
@@ -82,6 +85,8 @@ export class HostStore {
   private readonly sshConfigOverride: string | undefined
   /** Decrypted process-local view; prevents repeated DPAPI subprocess work. */
   private cache: StoreFile | undefined
+  /** Actual at-rest state sampled before secrets are decrypted. */
+  private readonly protectionByAlias = new Map<string, SecretProtection>()
 
   /**
    * @param path - store file path (defaults to the standard location).
@@ -105,17 +110,35 @@ export class HostStore {
 
   /** Secret-free projection for the browser and agent surfaces. */
   summarize(entry: SshHostEntry): SshHostSummary {
-    let keyReady = true
-    if (entry.auth.kind === 'key' && entry.auth.keyPath) {
-      keyReady = existsSync(expandHome(entry.auth.keyPath))
+    const keyReady = entry.auth.kind === 'key'
+      ? entry.auth.keyPath !== undefined && existsSync(expandHome(entry.auth.keyPath))
+      : undefined
+    let credentialReady = entry.auth.kind === 'password' && entry.auth.password !== undefined && entry.auth.password !== ''
+    if (entry.auth.kind === 'key' && keyReady === true && entry.auth.keyPath !== undefined) {
+      try {
+        const parsed = ssh2Utils.parseKey(readFileSync(expandHome(entry.auth.keyPath)), entry.auth.passphrase)
+        credentialReady = !(parsed instanceof Error)
+      } catch {
+        credentialReady = false
+      }
     }
+    const nodeId = `${entry.host.trim().toLowerCase()}:${String(entry.port)}`
+    const sameHostAliases = this.list()
+      .filter(candidate => `${candidate.host.trim().toLowerCase()}:${String(candidate.port)}` === nodeId)
+      .map(candidate => candidate.alias)
+      .sort((left, right) => left.localeCompare(right))
     return {
       alias: entry.alias,
       host: entry.host,
       port: entry.port,
       user: entry.user,
       auth: entry.auth.kind,
-      keyReady,
+      ...(keyReady !== undefined ? { keyReady } : {}),
+      credentialReady,
+      secretProtection: this.protectionByAlias.get(entry.alias) ?? 'none',
+      hostKeyPinned: entry.hostKeySha256 !== undefined,
+      nodeId,
+      sameHostAliases,
       ...(entry.hostKeySha256 !== undefined ? { hostKeySha256: entry.hostKeySha256 } : {}),
       proxyJump: [...entry.proxyJump],
       // Optional fields are spread conditionally: the tool bridge rejects
@@ -343,6 +366,7 @@ export class HostStore {
     // Decryption failures are not file corruption. In particular, DPAPI data
     // opened under another Windows account must stay in place for recovery.
     for (const entry of parsed.hosts) {
+      this.protectionByAlias.set(entry.alias, persistedSecretProtection(entry.auth.password, entry.auth.passphrase))
       entry.auth.password = unprotectSecret(entry.auth.password)
       entry.auth.passphrase = unprotectSecret(entry.auth.passphrase)
     }
@@ -366,6 +390,10 @@ export class HostStore {
           passphrase: protectSecret(entry.auth.passphrase),
         },
       })),
+    }
+    this.protectionByAlias.clear()
+    for (const entry of persisted.hosts) {
+      this.protectionByAlias.set(entry.alias, persistedSecretProtection(entry.auth.password, entry.auth.passphrase))
     }
     writeFileSync(tmp, JSON.stringify(persisted, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
     renameSync(tmp, this.path)

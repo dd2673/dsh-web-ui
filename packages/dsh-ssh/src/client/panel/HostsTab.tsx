@@ -141,9 +141,22 @@ export function HostsTab({ api, onConnect }: HostsTabProps) {
                 return (
                   <tr key={host.alias}>
                     <td className={css.mono}>{host.alias}</td>
-                    <td className={css.mono}>{host.host}:{host.port}</td>
+                    <td className={css.mono}>
+                      <div>{host.host}:{host.port}</div>
+                      {host.sameHostAliases.length > 1 && <div className={css.cellMuted}>{tt('hosts.sameEndpoint', { aliases: host.sameHostAliases.join(', ') })}</div>}
+                    </td>
                     <td>{host.user}</td>
-                    <td><span className={css.badge} data-kind={host.auth}>{host.auth === 'key' ? tt('form.auth.key') : tt('form.auth.password')}</span></td>
+                    <td>
+                      <span className={css.badge} data-kind={host.auth}>{host.auth === 'key' ? tt('form.auth.key') : tt('form.auth.password')}</span>
+                      <div className={css.cellMuted}>{host.credentialReady ? tt('hosts.credentialReady') : tt('hosts.credentialMissing')}</div>
+                      <div className={css.cellMuted}>{host.secretProtection === 'dpapi-current-user'
+                        ? tt('hosts.secretDpapi')
+                        : host.secretProtection === 'file-0600'
+                          ? tt('hosts.secretFile')
+                          : host.secretProtection === 'legacy-plaintext'
+                            ? tt('hosts.secretLegacy')
+                            : tt('hosts.secretNone')}</div>
+                    </td>
                     <td className={css.cellMuted}>{host.environment ?? ''}</td>
                     <td className={css.cellMuted}>{host.tags.join(', ')}</td>
                     <td className={css.cellMuted}>{host.description ?? ''}</td>

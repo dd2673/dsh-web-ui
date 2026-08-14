@@ -44,6 +44,7 @@ function handleCommand(command: string, stream: ClientChannel): void {
     stream.exit(0)
     stream.close()
   } else if (command === 'exit 7') respond('', 7)
+  else if (command === 'large-output') respond('你'.repeat(20), 0)
   else if (command === 'true') respond('', 0)
   else if (command === 'hang') {
     // Never respond: the caller's timeout must kill the channel.

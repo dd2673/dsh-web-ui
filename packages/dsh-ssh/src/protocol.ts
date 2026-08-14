@@ -51,7 +51,17 @@ export interface SshHostSummary {
   user: string
   auth: SshAuthKind
   /** Whether the key path exists on the host machine (key auth only). */
-  keyReady: boolean
+  keyReady?: boolean
+  /** Whether the selected authentication method has a usable credential. */
+  credentialReady: boolean
+  /** At-rest protection used by this host process for stored secrets. */
+  secretProtection: 'dpapi-current-user' | 'file-0600' | 'legacy-plaintext' | 'none'
+  /** Whether a server host key is pinned. */
+  hostKeyPinned: boolean
+  /** Normalized physical SSH endpoint used to detect duplicate-node actions. */
+  nodeId: string
+  /** Every configured account alias that resolves to this physical endpoint. */
+  sameHostAliases: string[]
   /** Trusted server host-key fingerprint; absent until explicitly accepted. */
   hostKeySha256?: string
   proxyJump: string[]
@@ -71,6 +81,12 @@ export interface ExecResult {
   timedOut: boolean
   stdout: string
   stderr: string
+  /** Total UTF-8 bytes received before the engine capture cap. */
+  stdoutBytes: number
+  stderrBytes: number
+  /** Whether the engine capture cap omitted any bytes. */
+  stdoutTruncated: boolean
+  stderrTruncated: boolean
   /** Wall-clock duration of the round trip in ms. */
   durationMs: number
   /** Connection error message when the command never ran. */
@@ -85,6 +101,13 @@ export interface ClusterResult {
   timedOut?: boolean
   stdout?: string
   stderr?: string
+  stdoutBytes?: number
+  stderrBytes?: number
+  stdoutTruncated?: boolean
+  stderrTruncated?: boolean
+  /** Model-output sanitization metadata (Agent tool only). */
+  redactions?: number
+  controlSequencesRemoved?: number
   durationMs?: number
   error?: string
 }

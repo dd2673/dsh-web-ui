@@ -5,7 +5,7 @@
  * SFTP upload/download/ls, and the connection probe.
  */
 
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { connect, createServer, type AddressInfo } from 'node:net'
@@ -79,6 +79,22 @@ describe('exec', () => {
     expect(result.stderr).toContain('hello err')
   })
 
+  it('caps output by UTF-8 bytes and reports the capture metadata', async () => {
+    addHost('exec-large')
+    const bounded = new SshEngine(store, { maxOutputBytes: 17 })
+    try {
+      const result = await bounded.exec('exec-large', 'large-output')
+      expect(result.stdoutBytes).toBe(60)
+      expect(result.stdoutTruncated).toBe(true)
+      expect(Buffer.byteLength(result.stdout.replace('...[output truncated]', ''), 'utf8')).toBeLessThanOrEqual(17)
+      expect(result.stdout).not.toContain('\uFFFD')
+      expect(result.stderrBytes).toBe(0)
+      expect(result.stderrTruncated).toBe(false)
+    } finally {
+      bounded.dispose()
+    }
+  })
+
   it('times out and reports timedOut', async () => {
     addHost('exec-timeout')
     const started = Date.now()
@@ -140,7 +156,8 @@ describe('cluster', () => {
     addHost('cluster-c', { environment: 'staging' })
     // The store accumulates hosts from every test; scope by explicit aliases.
     const aliases = ['cluster-a', 'cluster-b', 'cluster-c']
-    const results = await engine.cluster({ command: 'echo hello', aliases })
+    await expect(engine.cluster({ command: 'echo hello', aliases })).rejects.toThrow(/same SSH endpoint/i)
+    const results = await engine.cluster({ command: 'echo hello', aliases, allowDuplicateHosts: true })
     expect(results).toHaveLength(3)
     for (const result of results) {
       expect(result.ok).toBe(true)
@@ -228,6 +245,16 @@ describe('sftp (real sshd)', () => {
       const downloaded = await engine.download('sftp-real', join(remoteDir, 'payload.txt'), join(sshd.root, 'out.txt'))
       expect(downloaded.bytes).toBe(content.length)
       expect(readFileSync(join(sshd.root, 'out.txt'), 'utf8')).toBe(content)
+
+      const tree = join(sshd.root, 'tree-local')
+      mkdirSync(join(tree, 'nested'), { recursive: true })
+      writeFileSync(join(tree, 'root.txt'), 'root', 'utf8')
+      writeFileSync(join(tree, 'nested', 'child.txt'), 'child', 'utf8')
+      const treeUploaded = await engine.upload('sftp-real', tree, join(remoteDir, 'tree'), true, undefined, false, { maxFiles: 10, maxBytes: 1_024 })
+      expect(treeUploaded).toEqual({ bytes: 9, files: 2 })
+      const treeDownloaded = await engine.downloadDirectory('sftp-real', join(remoteDir, 'tree'), join(sshd.root, 'tree-out'), { maxFiles: 10, maxBytes: 1_024 })
+      expect(treeDownloaded).toEqual({ bytes: 9, files: 2 })
+      expect(readFileSync(join(sshd.root, 'tree-out', 'nested', 'child.txt'), 'utf8')).toBe('child')
     } finally {
       sshd.stop()
     }
@@ -331,6 +358,18 @@ describe('upload path rules', () => {
     await expect(
       engine.upload('rel-path', join(process.cwd(), 'package.json'), 'relative/dir/file.txt', false),
     ).rejects.toThrow(/absolute/)
+  })
+
+  it('rejects relative download paths before connecting', async () => {
+    addHost('download-rel-path')
+    await expect(
+      engine.download('download-rel-path', 'relative/file.txt', join(process.cwd(), 'download.txt')),
+    ).rejects.toThrow(/absolute/)
+  })
+
+  it('rejects invalid exec timeouts before connecting', async () => {
+    addHost('invalid-timeout')
+    await expect(engine.exec('invalid-timeout', 'true', -1)).rejects.toThrow(/timeoutMs/)
   })
 })
 

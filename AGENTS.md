@@ -6,6 +6,8 @@
 - 新插件需求先检索官方社区与 `dsh-plugin` 主题：优先直接采用，其次基于许可证允许的相似插件二次修改，最后才从零开发。
 - Git 工作台只操作 DSH `workspaceRegistry` 已登记的工作区；所有 Git 参数使用 argv 数组，不拼 shell 字符串。`pull` 固定 `--ff-only`，破坏性操作必须显式确认。
 - SSH 支持同一主机多账号（以 alias 区分）。真实密码、私钥、口令、服务器清单不得进入源码、fixture、日志或提交；Windows 持久密码使用 CurrentUser DPAPI，连接必须固定 Host Key。
+- SSH Agent 工具的真实 exec/cluster/传输/隧道变更/Host Key trust 必须接入 DSH 官方一次性 approval；dry-run 不得建立连接。相同 host:port 的多 alias 在 cluster 中默认整批拒绝，禁止静默挑选账号或重复执行。
+- Web PTY 保留原始终端流；进入模型上下文的 stdout/stderr 必须去 ANSI/控制符、执行高置信 secret 遮盖、按 UTF-8 字节截断，并声明原始字节数、截断、遮盖和控制符移除状态。该边界不得宣称为完整 DLP。
 - 已开始的远程命令禁止自动重放。隧道按实例隔离，停止一个隧道不得中断同一主机的其他连接。
 - 开发与验证使用独立 DSH profile，不安装到默认 `web` profile；先通过安全审计、测试、构建，再做浏览器与真实服务器只读烟测。
 - 每个文件修改任务完成后提交并推送当前分支；若没有可写远端，必须明确报告，不得伪造已推送状态。

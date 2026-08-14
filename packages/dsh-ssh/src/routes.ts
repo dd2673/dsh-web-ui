@@ -296,8 +296,9 @@ export function makeRoutes(deps: SshRoutesDeps): { routes: WebRoute[]; upgrade: 
         const environment = typeof body?.environment === 'string' ? body.environment : undefined
         const timeoutMs = typeof body?.timeoutMs === 'number' ? body.timeoutMs : undefined
         const maxWorkers = typeof body?.maxWorkers === 'number' ? body.maxWorkers : undefined
+        const allowDuplicateHosts = body?.allowDuplicateHosts === true
         try {
-          writeJson(res, 200, { results: await engine.cluster({ command, aliases, environment, tags, timeoutMs, maxWorkers }) })
+          writeJson(res, 200, { results: await engine.cluster({ command, aliases, environment, tags, timeoutMs, maxWorkers, allowDuplicateHosts }) })
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }

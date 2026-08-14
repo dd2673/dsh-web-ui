@@ -2,7 +2,7 @@
  * dsh-ssh — host half. Mounts the SSH engine (persistent ssh2 connection
  * pool, exec / PTY shell / SFTP / tunnels / cluster), the /api/dsh-ssh route
  * family plus the terminal WebSocket upgrade, the agent tools (ssh_list,
- * ssh_exec, ssh_upload, ssh_download, ssh_tunnel, ssh_cluster), and a
+ * ssh_exec, ssh_upload, ssh_download, ssh_tunnel, ssh_cluster, ssh_host_key), and a
  * system-prompt announcement. The browser half (./client) renders the host
  * manager and web terminal. Everything rides official NPM SDK packages —
  * no dsh source changes.
@@ -17,7 +17,8 @@ import type {} from '@deepseek-ai/dsh-tools'
 import { SshEngine } from './engine.ts'
 import { makeRoutes } from './routes.ts'
 import { HostStore } from './store.ts'
-import { sshClusterTool, sshDownloadTool, sshExecTool, sshListTool, sshTunnelTool, sshUploadTool } from './tools.ts'
+import { sshClusterTool, sshDownloadTool, sshExecTool, sshHostKeyTool, sshListTool, sshTunnelTool, sshUploadTool } from './tools.ts'
+import { sshApprovalDecision } from './policy.ts'
 
 /** Stable cordis plugin name. */
 export const name = 'ssh'
@@ -61,7 +62,7 @@ const DEFAULT_ANNOUNCE = true
 const SECTION_ORDER = 150
 
 /** Model-facing announcement: plugin presence, capabilities, and limits. */
-export const SSH_GUIDANCE = '本机已安装 dsh-wending-ssh-manager 插件：侧边栏「SSH」入口；同一 IP 可按不同 alias 管理多个账号。能力：主机配置存在插件配置的 storeFile（未配置时为 ~/.dsh/dsh-ssh.json，可从 ~/.ssh/config 导入）；Windows 密码和密钥口令使用当前用户 DPAPI 加密；首次连接必须在 GUI 验证并固定服务器 Host Key；持久连接池空闲 30 分钟自动断开；ssh_list 列出主机、ssh_exec 执行远程命令、ssh_upload/ssh_download 传输文件、ssh_tunnel 本地端口转发、ssh_cluster 集群并发执行；支持密钥/密码认证、passphrase 密钥与 ProxyJump。限制：已开始的远程命令断线后不会自动重放；命令输出原样返回、可能含敏感信息；传输/执行消耗真实远程资源，先确认再操作。用户提到「SSH / 远程服务器 / 服务器操作 / 跳板机 / 隧道 / 部署 / 上传下载」时即指本插件。'
+export const SSH_GUIDANCE = '本机已安装 dsh-wending-ssh-manager 插件：侧边栏「SSH」入口；同一 IP 可按不同 alias 管理多个账号，ssh_list 会显示同一物理 endpoint 的 alias 分组、认证就绪状态、Host Key 固定状态和凭据静态保护方式。能力：主机配置存在插件配置的 storeFile（未配置时为 ~/.dsh/dsh-ssh.json，可从 ~/.ssh/config 导入）；Windows 密码和密钥口令使用当前用户 DPAPI 加密；ssh_host_key 可 scan/verify/trust；ssh_exec 执行远程命令；ssh_upload/ssh_download 支持文件及受限目录传输；ssh_tunnel 管理本地端口转发；ssh_cluster 集群并发执行并默认拒绝同 endpoint 多 alias 重复执行。Agent 可用 dryRun 预览；真实 exec/cluster/传输/隧道变更/Host Key trust 通过官方 approval seam 请求一次性确认。模型可见命令输出会去 ANSI/控制符、按高置信规则脱敏并按字节截断；Web 终端保持原始 PTY 输出。已开始的远程命令断线后绝不自动重放，并明确标记远端状态未知。用户提到「SSH / 远程服务器 / 服务器操作 / 跳板机 / 隧道 / 部署 / 上传下载」时即指本插件。'
 
 /**
  * Mount the SSH engine, routes, tools, and announcement.
@@ -99,6 +100,7 @@ export function apply(ctx: Context, config?: Config): void {
     sshDownloadTool(engine),
     sshTunnelTool(engine),
     sshClusterTool(engine),
+    sshHostKeyTool(engine),
   ]
   let disposeTools: (() => void) | undefined
 
@@ -144,7 +146,11 @@ export function apply(ctx: Context, config?: Config): void {
     disposeTools = ctx.effect(
       () => {
         const disposers = tools.map(tool => ctx.tools.register(tool))
-        return () => { for (const dispose of disposers) dispose() }
+        const disposePolicy = ctx.on('tools/pre-execute', sshApprovalDecision)
+        return () => {
+          disposePolicy()
+          for (const dispose of disposers) dispose()
+        }
       },
       'dsh-ssh: tools',
     )
