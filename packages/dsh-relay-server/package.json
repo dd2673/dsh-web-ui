@@ -1,6 +1,6 @@
 {
   "name": "@linxin666/dsh-relay-server",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "private": true,
   "description": "Optional self-hosted community relay for a DeepSeek Harness host and paired Android device",
   "type": "module",
