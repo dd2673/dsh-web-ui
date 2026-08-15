@@ -289,7 +289,8 @@ test('canonical Android entrypoint pins package, label, icon, version and debug 
   assert.equal(buildProfile.versionName, packageJson.version)
   assert.equal(buildProfile.brandResources.length, 4)
   for (const resource of buildProfile.brandResources) {
-    const actualSha256 = createHash('sha256').update(readFileSync(join(repoRoot, resource.path))).digest('hex').toUpperCase()
+    const normalizedText = readFileSync(join(repoRoot, resource.path), 'utf8').replace(/\r\n?/g, '\n')
+    const actualSha256 = createHash('sha256').update(normalizedText, 'utf8').digest('hex').toUpperCase()
     assert.equal(resource.sha256, actualSha256)
   }
   assert.match(buildProfile.debugCertificateSha256, /^[0-9A-F]{64}$/)

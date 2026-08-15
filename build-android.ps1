@@ -19,6 +19,17 @@ function Assert-Identity([bool]$Condition, [string]$Message) {
   if (-not $Condition) { throw "Android build identity mismatch: $Message" }
 }
 
+function Get-NormalizedTextSha256([string]$Path) {
+  $text = [IO.File]::ReadAllText($Path).Replace("`r`n", "`n").Replace("`r", "`n")
+  $bytes = [Text.Encoding]::UTF8.GetBytes($text)
+  $sha256 = [Security.Cryptography.SHA256]::Create()
+  try {
+    return -join ($sha256.ComputeHash($bytes) | ForEach-Object { $_.ToString('X2') })
+  } finally {
+    $sha256.Dispose()
+  }
+}
+
 Assert-Identity ($profile.schemaVersion -eq 1) 'unsupported profile schema'
 Assert-Identity ($debugManifest -match ('package="' + [regex]::Escape($profile.packageName) + '"')) 'debug package name changed'
 Assert-Identity ($releaseManifest -match ('package="' + [regex]::Escape($profile.packageName) + '"')) 'release package name changed'
@@ -28,7 +39,9 @@ Assert-Identity ($activity -match ('package ' + [regex]::Escape($profile.mainAct
 foreach ($resource in $profile.brandResources) {
   $resourcePath = Join-Path $repoRoot ($resource.path -replace '/', '\')
   Assert-Identity (Test-Path -LiteralPath $resourcePath) "brand resource is missing: $($resource.path)"
-  Assert-Identity ((Get-FileHash -LiteralPath $resourcePath -Algorithm SHA256).Hash -eq $resource.sha256) "brand resource changed: $($resource.path)"
+  # Git may materialize these text assets with CRLF or LF. Brand identity is
+  # the normalized UTF-8 content, not the checkout's line-ending policy.
+  Assert-Identity ((Get-NormalizedTextSha256 $resourcePath) -eq $resource.sha256) "brand resource changed: $($resource.path)"
 }
 
 $artifactName = [string]$profile.artifacts.$Variant

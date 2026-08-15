@@ -6,7 +6,7 @@
   "brandResources": [
     {
       "path": "packages/dsh-android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml",
-      "sha256": "03B31E8BC07E2B2BE947F2EEC0817D9812196EC3F3CEBA9442B206797D6F1DF1"
+      "sha256": "EF143DD5C199DDAD82B87CDBA70C4117C3E70862A2A974ECBADDA45D8B1F6B2B"
     },
     {
       "path": "packages/dsh-android/app/src/main/res/drawable/ic_launcher_foreground.xml",
@@ -14,7 +14,7 @@
     },
     {
       "path": "packages/dsh-android/app/src/main/res/values/colors.xml",
-      "sha256": "43F73ABD3F45E9F75298D950B5E0D8B4BAABE18EFAC3833DBB31512F3AAF1594"
+      "sha256": "E5E8CBC6ED51A103F84C0A52C25E983D11C065B476887884942176AAB69BF91C"
     },
     {
       "path": "packages/dsh-android/app/src/main/assets/remote-link.svg",
