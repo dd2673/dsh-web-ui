@@ -309,6 +309,57 @@
   cursor: default;
 }
 
+.tokenCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 16px;
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.tokenTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tokenHint,
+.tokenState,
+.tokenOnce,
+.tokenError {
+  margin: 3px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.tokenHint,
+.tokenState { color: var(--dsw-alias-label-secondary); }
+.tokenOnce { color: var(--dsw-alias-state-warn-primary); }
+.tokenError { color: var(--dsw-alias-state-error-primary); }
+
+.tokenValue {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--dsw-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  user-select: all;
+}
+
+.relayQr {
+  display: grid;
+  width: fit-content;
+  margin: 4px auto;
+  padding: 10px;
+  border-radius: 16px;
+  background: #fff;
+}
+
 .banner {
   padding: 16px;
   border: 1px solid var(--dsw-alias-border-l2);

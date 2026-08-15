@@ -22,14 +22,17 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
-import type { RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
+import type { ClientResponse, RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
 import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
 import type { PairingService } from './pairing.ts'
 import { readCookie } from './gate.ts'
 
 /** Methods the phone surface may call. Everything else is refused. */
-const MOBILE_ALLOWLIST = new Set([
+export const MOBILE_ALLOWLIST = new Set([
   'workspace.list',
+  'workspace.create',
+  'workspace.archiveSession',
+  'host.listDirectory',
   'session.create',
   'session.list',
   'session.history',
@@ -38,7 +41,24 @@ const MOBILE_ALLOWLIST = new Set([
   'session.models',
   'session.selectModel',
   'session.rename',
+  'session.cancel',
+  'session.updateQueue',
+  'skill.list',
+  'agentPreset.list',
+  'agentPreset.select',
+  'events.respond',
 ])
+
+/** Keep one relay response comfortably below the 128 KiB WebSocket frame cap. */
+const MOBILE_HISTORY_MAX_BYTES = 96 * 1024
+/** One unusually long message must not evict the whole recent conversation. */
+const MOBILE_HISTORY_TEXT_MAX_BYTES = 24 * 1024
+const MOBILE_HISTORY_TRUNCATION_MARKER = '\n[内容过长，移动端仅显示部分内容]'
+
+/** Public guard shared by the local HTTP carrier and the relay carrier. */
+export function isMobileMethodAllowed(method: string): boolean {
+  return MOBILE_ALLOWLIST.has(method)
+}
 
 /**
  * Locally answered display-preference method (the phone's read-only
@@ -70,6 +90,185 @@ function parseSessionListCursor(cursor: string): { updatedAt: number; sessionId:
 function afterCursor(row: { updatedAt: number; sessionId: string }, position: { updatedAt: number; sessionId: string }): boolean {
   return row.updatedAt < position.updatedAt
     || (row.updatedAt === position.updatedAt && row.sessionId > position.sessionId)
+}
+
+/** A stable turn/step key for replacing streamed chunks with the final message. */
+function historyStepKey(event: { data?: Record<string, unknown> }): string {
+  const data = event.data ?? {}
+  return `${String(data.turn ?? '')}:${String(data.step ?? '')}`
+}
+
+/** Truncate by UTF-8 bytes rather than JS code units so CJK text stays within the wire budget. */
+function truncateHistoryText(value: unknown): { text: string; truncated: boolean } {
+  const text = typeof value === 'string' ? value : ''
+  if (Buffer.byteLength(text, 'utf8') <= MOBILE_HISTORY_TEXT_MAX_BYTES) return { text, truncated: false }
+  const markerBytes = Buffer.byteLength(MOBILE_HISTORY_TRUNCATION_MARKER, 'utf8')
+  const bodyBudget = Math.max(0, MOBILE_HISTORY_TEXT_MAX_BYTES - markerBytes)
+  const source = Buffer.from(text, 'utf8').subarray(0, bodyBudget)
+  // Drop incomplete trailing UTF-8 bytes instead of emitting a replacement character.
+  const body = new TextDecoder('utf-8', { fatal: false }).decode(source).replace(/\uFFFD+$/u, '')
+  return { text: `${body}${MOBILE_HISTORY_TRUNCATION_MARKER}`, truncated: true }
+}
+
+/** Keep only text blocks needed by the Android transcript. */
+function compactContent(value: unknown): { content: Array<{ type: 'text'; text: string }>; truncated: boolean } {
+  if (!Array.isArray(value)) return { content: [], truncated: false }
+  let truncated = false
+  const content = value.flatMap((block): Array<{ type: 'text'; text: string }> => {
+    const candidate = block as { type?: unknown; text?: unknown }
+    if (candidate?.type !== 'text') return []
+    const bounded = truncateHistoryText(candidate.text)
+    truncated ||= bounded.truncated
+    return [{ type: 'text', text: bounded.text }]
+  })
+  return { content, truncated }
+}
+
+/**
+ * Harness logs injected workspace instructions as a system-reminder carrier.
+ * Desktop renders that carrier as context chrome, not as a user message. The
+ * phone keeps the same semantic without transferring the instruction body.
+ */
+function internalContextSummary(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined
+  const text = value
+    .filter(block => block !== null && typeof block === 'object' && (block as { type?: unknown }).type === 'text')
+    .map(block => String((block as { text?: unknown }).text ?? ''))
+    .join('')
+    .trimStart()
+  if (text.startsWith('Current runtime context. This snapshot supersedes earlier runtime-context snapshots.')) {
+    return '已应用运行上下文'
+  }
+  if (text.startsWith('<system-reminder>')) {
+    return /workspace instructions|Instructions from:/i.test(text)
+      ? '已应用工作区说明'
+      : '已应用会话上下文'
+  }
+  return undefined
+}
+
+/**
+ * Project Host history onto the small, privacy-minimised transcript needed by Android.
+ * Stream deltas are retained only for an unfinished step; completed steps use their
+ * final assistant message. Tool arguments/results, context bodies, reasoning,
+ * usage and approvals do not cross the relay; only a safe tool lifecycle bit
+ * and a compact context summary remain.
+ */
+export function compactMobileHistoryValue(value: unknown): unknown {
+  const source = value as { events?: unknown[]; hasMore?: boolean; projections?: unknown }
+  const wrappers = Array.isArray(source?.events) ? source.events : []
+  const events = wrappers
+    .map(wrapper => (wrapper as { event?: unknown })?.event ?? wrapper)
+    .filter((event): event is Record<string, unknown> => event !== null && typeof event === 'object')
+  const finalized = new Set(events
+    .filter(event => event.type === 'assistant/message')
+    .map(event => historyStepKey(event as { data?: Record<string, unknown> })))
+  let mobileTruncated = false
+  const compacted = events.flatMap((event): unknown[] => {
+    const type = typeof event.type === 'string' ? event.type : ''
+    const seq = typeof event.seq === 'number' ? event.seq : undefined
+    const time = typeof event.time === 'number' ? event.time : undefined
+    const data = event.data !== null && typeof event.data === 'object'
+      ? event.data as Record<string, unknown>
+      : {}
+    const envelope = (nextData: unknown, nextType = type): unknown => ({
+      event: {
+        type: nextType,
+        ...(seq !== undefined ? { seq } : {}),
+        ...(time !== undefined ? { time } : {}),
+        data: nextData,
+      },
+    })
+    if (type === 'user/message') {
+      const contextSummary = internalContextSummary(data.content)
+      if (contextSummary !== undefined) {
+        return [envelope({ summary: contextSummary, source: 'harness-context' }, 'context/injection')]
+      }
+      const bounded = compactContent(data.content)
+      mobileTruncated ||= bounded.truncated
+      return [envelope({ content: bounded.content, id: data.id })]
+    }
+    if (type === 'assistant/message') {
+      const message = data.message !== null && typeof data.message === 'object'
+        ? data.message as Record<string, unknown>
+        : {}
+      const bounded = compactContent(message.content)
+      mobileTruncated ||= bounded.truncated
+      return [envelope({
+        turn: data.turn,
+        step: data.step,
+        message: { role: 'assistant', content: bounded.content, id: message.id },
+      })]
+    }
+    if (type === 'assistant/chunk') {
+      if (finalized.has(historyStepKey({ data }))) return []
+      const chunk = data.chunk !== null && typeof data.chunk === 'object'
+        ? data.chunk as Record<string, unknown>
+        : {}
+      if (chunk.type !== 'text-delta') return []
+      const bounded = truncateHistoryText(chunk.text)
+      mobileTruncated ||= bounded.truncated
+      return [envelope({
+        turn: data.turn,
+        step: data.step,
+        chunk: { type: 'text-delta', index: chunk.index, text: bounded.text },
+      })]
+    }
+    if (type === 'tool/call') {
+      return [envelope({ turn: data.turn, step: data.step, callId: data.callId, name: data.name })]
+    }
+    if (type === 'tool/result') {
+      const message = data.message !== null && typeof data.message === 'object'
+        ? data.message as Record<string, unknown>
+        : {}
+      const sourceData = message.source !== null && typeof message.source === 'object'
+        ? message.source as Record<string, unknown>
+        : {}
+      const blocks = Array.isArray(message.content) ? message.content : []
+      const isError = data.error !== undefined || blocks.some(block => (
+        block !== null && typeof block === 'object' && (block as { isError?: unknown }).isError === true
+      ))
+      return [envelope({
+        turn: data.turn,
+        step: data.step,
+        callId: sourceData.callId ?? data.callId,
+        isError,
+      })]
+    }
+    const reason = data.reason !== null && typeof data.reason === 'object'
+      ? data.reason as Record<string, unknown>
+      : undefined
+    if (type === 'turn/end' && typeof reason?.kind === 'string') {
+      const safeKind = ['completed', 'error', 'interrupted', 'cancelled', 'max-tokens'].includes(reason.kind)
+        ? reason.kind
+        : 'completed'
+      return [envelope({ turn: data.turn, reason: { kind: safeKind } })]
+    }
+    return []
+  })
+
+  // Keep the newest complete transcript slice when even compacted history is too large.
+  const accepted: unknown[] = []
+  for (let index = compacted.length - 1; index >= 0; index -= 1) {
+    const candidate = [compacted[index], ...accepted]
+    const projected = {
+      events: candidate,
+      hasMore: source.hasMore === true || index > 0,
+      ...(source.projections !== undefined ? { projections: source.projections } : {}),
+      ...(mobileTruncated || index > 0 ? { mobileTruncated: true } : {}),
+    }
+    if (Buffer.byteLength(JSON.stringify(projected), 'utf8') > MOBILE_HISTORY_MAX_BYTES) {
+      mobileTruncated = true
+      continue
+    }
+    accepted.unshift(compacted[index])
+  }
+  return {
+    events: accepted,
+    hasMore: source.hasMore === true || accepted.length < compacted.length,
+    ...(source.projections !== undefined ? { projections: source.projections } : {}),
+    ...(mobileTruncated || accepted.length < compacted.length ? { mobileTruncated: true } : {}),
+  }
 }
 
 /** Route-family dependencies. */
@@ -131,7 +330,7 @@ export function makeMobileApiRoutes(deps: MobileApiDeps): WebRoute[] {
     }
     const method = pathname.slice(MOBILE_API_METHOD_PREFIX.length)
     const local = method === MOBILE_PREFERENCES_METHOD
-    if (!MOBILE_ALLOWLIST.has(method) && !local) {
+    if (!isMobileMethodAllowed(method) && !local) {
       writeJson(res, 403, { ok: false, error: { code: 'forbidden', message: `method ${method} is not exposed to the mobile surface` } })
       return
     }
@@ -157,7 +356,7 @@ export function makeMobileApiRoutes(deps: MobileApiDeps): WebRoute[] {
       return
     }
     try {
-      const response = await dispatch(apiProxy, method, parsed?.payload, rpcId)
+      const response = await dispatchMobileMethod(apiProxy, method, parsed?.payload, rpcId)
       writeJson(res, 200, response)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -239,7 +438,8 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 }
 
 /** Dispatch one allowlisted method through the host ApiProxy. */
-async function dispatch(apiProxy: ApiProxy, method: string, payload: unknown, rpcId: string): Promise<unknown> {
+export async function dispatchMobileMethod(apiProxy: ApiProxy, method: string, payload: unknown, rpcId: string): Promise<unknown> {
+  if (!isMobileMethodAllowed(method)) throw new Error(`mobile method ${method} is not allowed`)
   const request: RpcRequest<unknown> = { rpcId: RpcId(rpcId), payload }
   if (method === 'session.list') {
     const full = await apiProxy.sessions.list(request as never)
@@ -283,12 +483,44 @@ async function dispatch(apiProxy: ApiProxy, method: string, payload: unknown, rp
     result: response.result,
   })
   if (method === 'workspace.list') return wrap(await apiProxy.workspace.list(request as never))
+  if (method === 'workspace.create') return wrap(await apiProxy.workspace.create(request as never))
+  if (method === 'workspace.archiveSession') return wrap(await apiProxy.workspace.archiveSession(request as never))
+  if (method === 'host.listDirectory') return wrap(await apiProxy.host.listDirectory(request as never, new AbortController().signal))
   if (method === 'session.create') return wrap(await apiProxy.sessions.create(request as never))
-  if (method === 'session.history') return wrap(await apiProxy.sessions.history(request as never))
+  if (method === 'session.history') {
+    const response = await apiProxy.sessions.history(request as never)
+    if (!response.result.ok) return wrap(response)
+    return {
+      type: 'server-response' as const,
+      rpcId,
+      result: { ok: true, value: compactMobileHistoryValue(response.result.value) },
+    }
+  }
   if (method === 'session.search') return wrap(await apiProxy.sessions.search(request as never, new AbortController().signal))
   if (method === 'session.prompt') return wrap(await apiProxy.sessions.prompt(request as never))
   if (method === 'session.models') return wrap(await apiProxy.sessions.models(request as never))
   if (method === 'session.selectModel') return wrap(await apiProxy.sessions.selectModel(request as never))
   if (method === 'session.rename') return wrap(await apiProxy.sessions.rename(request as never))
+  if (method === 'session.cancel') return wrap(await apiProxy.sessions.cancel(request as never))
+  if (method === 'session.updateQueue') return wrap(await apiProxy.sessions.updateQueue(request as never))
+  if (method === 'skill.list') return wrap(await apiProxy.skills.list(request as never))
+  if (method === 'agentPreset.list') return wrap(await apiProxy.agentPresets.list(request as never))
+  if (method === 'agentPreset.select') return wrap(await apiProxy.agentPresets.select(request as never))
+  if (method === 'events.respond') {
+    const value = payload as { result?: unknown } | undefined
+    const message: ClientResponse = {
+      type: 'client-response',
+      rpcId: RpcId(rpcId),
+      result: value?.result as ClientResponse['result'],
+    }
+    const receipt = await apiProxy.respond(message)
+    return {
+      type: 'server-response' as const,
+      rpcId,
+      result: receipt.accepted
+        ? { ok: true, value: receipt }
+        : { ok: false, error: { code: 'not-found', message: receipt.reason } },
+    }
+  }
   throw new Error(`unhandled allowlisted method ${method}`)
 }

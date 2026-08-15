@@ -8,6 +8,14 @@
 
 ## 功能
 
+### 社区 relay 与 Android companion
+
+社区维护的 Android companion 与可选自托管 relay 是第三方集成，不是 DeepSeek 官方应用或托管服务。`relayEnabled` 模式为 companion 增加仅出站的 WebSocket 网关。设置 `relayUrl`、`relayHostId` 与 `relayHostTokenEnv` 中的环境变量名；插件不会新增本地端口，DSH 仍使用 loopback 端口 3080。relay 只保存有界元数据与令牌摘要，不保存会话、工具输出或仓库内容。
+
+本地插件是 Android 凭据的权威。桌面面板可生成/轮换 256-bit 令牌或撤销访问。明文仅展示一次；本地磁盘与 relay 持久化只保存 SHA-256。轮换通过独立认证的 host 通道发送，会立即断开当前 Android 设备并使旧令牌失效。companion 通过 Android Keystore 存储明文且只请求一次。
+
+远程 RPC 已版本化并设有白名单。Android companion 提供目录选择器，以及会话、聊天、队列和紧凑输入框控制。Git、SSH 与内置 Windows agent 不属于本 companion 的范围。
+
 - **入口**：侧边栏底部靠设置按钮旁的手机图标。
 - **面板**：「移动端远程控制」标题、「扫码或在手机上打开链接，即可远程控制当前工作区」副标题、「手机扫码连接」卡片（含状态区「等待手机连接」+ 状态徽标）、大号二维码、「无法扫码？可以在手机上打开链接」提示，以及三个按钮：停止 / 刷新二维码 / 复制链接。
 - **手机侧**：扫码将手机与一次性、限时令牌绑定，并落地到 **`/m` 独立移动端界面**——一款专为小屏设计的轻客户端（见[截图](#截图)），而不是把桌面 UI 塞进手机。链接携带 `workspace` 参数，手机落地到桌面正在查看的同一工作区。
@@ -17,12 +25,7 @@
 
 ## 截图
 
-390pt 视口下的手机界面。亮色是默认主题；每个页头内的日/月切换随时翻到暗色调色板。
-
-- **工作区**——列表，每行一个工作区及其各自的会话：![Workspaces](docs/screenshots/mobile-workspaces.png)
-- **会话**——一个工作区的会话，头部是 新建会话 按钮（创建附加到该工作区的空白会话并立即打开）：![Sessions](docs/screenshots/mobile-sessions.png)
-- **聊天**——带桌面折叠纪律的消息（折叠的 深度思考 推理与 工具 工具调用行）、钉住的输入栏带 模型 / 权限 chips，以及 agent 工作时的实时流：![Chat](docs/screenshots/mobile-chat.png)
-- **模型选择**——底部弹层，provider 分组目录 + 每模型 思考强度 区（与桌面使用的同一份 `session.models` 目录）：![Model sheet](docs/screenshots/mobile-model-sheet.png)
+本 README 不嵌入设备截图。`/m` Web UI 是 390pt 手机界面，采用亮色优先主题，提供工作区、会话、聊天与模型选择器。Android companion 的素材另行记录，且不描述 `/m` Web UI。
 
 ## 需求
 

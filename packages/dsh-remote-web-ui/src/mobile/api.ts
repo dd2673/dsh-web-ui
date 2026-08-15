@@ -81,11 +81,11 @@ export async function history(
   }, signal)
 }
 
-/** Send one text prompt (queued: the agent picks it up in order). */
-export async function prompt(sessionId: string, text: string): Promise<void> {
+/** Send one text prompt; queue waits its turn, steer joins the running turn. */
+export async function prompt(sessionId: string, text: string, mode: 'queue' | 'steer' = 'queue'): Promise<void> {
   await callUnary<{ accepted: true }>('session.prompt', {
     sessionId,
-    mode: 'queue',
+    mode,
     content: [{ type: 'text', text }],
   })
 }

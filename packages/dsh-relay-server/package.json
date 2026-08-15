@@ -1,0 +1,17 @@
+{
+  "name": "@linxin666/dsh-relay-server",
+  "version": "0.1.14",
+  "private": true,
+  "description": "Optional self-hosted community relay for a DeepSeek Harness host and paired Android device",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "node --check src/websocket.mjs && node --check src/state.mjs && node --check src/server.mjs && node --check src/main.mjs",
+    "typecheck": "node --check src/websocket.mjs && node --check src/state.mjs && node --check src/server.mjs && node --check src/main.mjs",
+    "test": "node --experimental-websocket --test tests/*.test.mjs",
+    "start": "node src/main.mjs"
+  },
+  "license": "Apache-2.0"
+}

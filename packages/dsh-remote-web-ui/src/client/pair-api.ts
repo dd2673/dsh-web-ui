@@ -59,6 +59,45 @@ export interface PairStateFrame {
   tunnel?: TunnelStatusFrame
 }
 
+export interface RelayTokenStatus {
+  configured: boolean
+  fingerprint?: string
+  updatedAt: number
+  expiresAt?: number
+  expired?: boolean
+  /** Present only in the response that rotated the token. */
+  token?: string
+  /** One-time Android deep link rendered as a QR; absent from status reads. */
+  pairingUri?: string
+  /** Secret-free relay base shown beside the QR. */
+  relayUrl?: string
+  /** Internal desktop identity encoded into the QR. */
+  hostId?: string
+}
+
+async function relayTokenCall(path = '', method = 'GET'): Promise<RelayTokenStatus> {
+  const response = await fetch(`/api/remote-web-ui/relay-token${path}`, { method, cache: 'no-store' })
+  if (!response.ok) throw new Error(`relay token request failed with ${String(response.status)}`)
+  const body = await response.json() as { ok?: boolean; value?: RelayTokenStatus }
+  if (body.ok !== true || body.value === undefined) throw new Error('invalid relay token response')
+  return body.value
+}
+
+/** Read secret-free token status from the loopback-only plugin route. */
+export function relayTokenStatus(): Promise<RelayTokenStatus> {
+  return relayTokenCall()
+}
+
+/** Rotate the unique Android bearer; the clear token is returned exactly once. */
+export function rotateRelayToken(): Promise<RelayTokenStatus> {
+  return relayTokenCall('/rotate', 'POST')
+}
+
+/** Revoke the Android bearer locally and on the relay. */
+export function revokeRelayToken(): Promise<RelayTokenStatus> {
+  return relayTokenCall('/revoke', 'POST')
+}
+
 /**
  * Mint a fresh pairing token (one active token at a time — this invalidates
  * any previous link).

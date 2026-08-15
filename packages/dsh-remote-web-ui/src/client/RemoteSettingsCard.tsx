@@ -27,6 +27,8 @@ export interface RemoteSettings {
   publicBaseUrl?: string
   /** When on, the plugin runs its own Cloudflare quick tunnel automatically. */
   autoTunnel?: boolean
+  /** Community relay service URL. Host identity and host credential stay internal. */
+  relayUrl?: string
   /** Mobile composer: plain Enter sends; off means Enter inserts a newline. */
   mobileEnterToSend?: boolean
 }
@@ -49,6 +51,8 @@ export interface RemoteSettingsCardState extends CardShell {
   publicBaseUrl: CardFieldState
   /** Auto public tunnel switch. */
   autoTunnel: CardFieldState
+  /** User-facing relay service URL; blank disables the relay connection. */
+  relayUrl: CardFieldState
   /** Mobile composer Enter-to-send switch. */
   mobileEnterToSend: CardFieldState
 }
@@ -77,6 +81,7 @@ export class RemoteSettingsCardController {
       booleanField('requirePairingForLan'),
       textField('publicBaseUrl'),
       booleanField('autoTunnel'),
+      textField('relayUrl'),
       booleanField('mobileEnterToSend'),
     ])
     this.store = this.form.bind(() => this.projection())
@@ -93,6 +98,7 @@ export class RemoteSettingsCardController {
       requirePairingForLan: this.form.field('requirePairingForLan'),
       publicBaseUrl: this.form.field('publicBaseUrl'),
       autoTunnel: this.form.field('autoTunnel'),
+      relayUrl: this.form.field('relayUrl'),
       mobileEnterToSend: this.form.field('mobileEnterToSend'),
     }
   }
@@ -136,6 +142,16 @@ export function RemoteSettingsCard(props: RemoteSettingsCardProps) {
       onSave={props.save}
       onDiscard={props.discard}
     >
+      <ValueField
+        id="settings-remote-relay-url"
+        label={t('settings.relayUrl')}
+        hint={t('settings.relayUrlHint')}
+        placeholder="wss://www.example.com/dsh-relay"
+        {...fieldProps}
+        {...state.relayUrl}
+        onEdit={(text) => { props.edit('relayUrl', text) }}
+        onReset={() => { props.resetField('relayUrl') }}
+      />
       <BooleanField
         id="settings-remote-enabled"
         label={t('settings.enabled')}

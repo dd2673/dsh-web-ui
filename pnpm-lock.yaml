@@ -81,6 +81,12 @@ importers:
         specifier: ^4.1.8
         version: 4.1.10(@types/node@22.20.1)(esbuild@0.28.2)(jsdom@29.1.1)
 
+  packages/dsh-android:
+    dependencies:
+      jsqr:
+        specifier: 1.4.0
+        version: 1.4.0
+
   packages/dsh-git-graph:
     devDependencies:
       '@deepseek-ai/cordis':
@@ -347,6 +353,8 @@ importers:
       vitest:
         specifier: ^4.1.8
         version: 4.1.10(@types/node@22.20.1)(esbuild@0.28.2)(jsdom@29.1.1)
+
+  packages/dsh-relay-server: {}
 
   packages/dsh-remote-web-ui:
     dependencies:
@@ -2778,6 +2786,9 @@ packages:
     resolution: {integrity: sha512-/sM3dO2FOzXjKQhJuo0Q173wf2KOo8t4I8vHy6lF9poUp7bKT0/NHE8fPX23PwfhnykfqnC2xRxOnVw5XuGIaA==}
     engines: {node: '>=6'}
     hasBin: true
+
+  jsqr@1.4.0:
+    resolution: {integrity: sha512-dxLob7q65Xg2DvstYkRpkYtmKm2sPJ9oFhrhmudT1dZvNFFTlroai3AWSpLey/w5vMcLBXRgOJsbXpdN9HzU/A==}
 
   katex@0.16.47:
     resolution: {integrity: sha512-Eeo8Ys1doU1z+x8AZsPpQu+p/QcZBI5PeOo7QGQdy2x2m0MU/hYagBbGOmXwr5KVbEfVuWv9LpnQWeehogurjg==}
@@ -5324,6 +5335,8 @@ snapshots:
       - '@noble/hashes'
 
   jsesc@3.1.0: {}
+
+  jsqr@1.4.0: {}
 
   katex@0.16.47:
     dependencies:

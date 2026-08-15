@@ -365,7 +365,7 @@ describe("runUpdate", () => {
     vi.useFakeTimers()
     const child = new FakeChild(null)
     const spawnImpl = (() => child) as never
-    const promise = runUpdate({ profileDir: "/p", packages: ["a"], spawnImpl, timeoutMs: 1000 })
+    const promise = runUpdate({ profileDir: "/p", packages: ["a"], spawnImpl, platform: "linux", timeoutMs: 1000 })
     vi.advanceTimersByTime(1000)
     const result = await promise
     expect(child.killed).toBe(true)

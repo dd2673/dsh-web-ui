@@ -12,7 +12,10 @@ import { createPortal } from 'react-dom'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { PairingPhase } from '../pairing.ts'
 import { RemotePanel, type PanelState } from './RemotePanel.tsx'
-import { copyText, issuePair, stopPair, type IssueResponse, type PairStateFrame, type TunnelStatusFrame } from './pair-api.ts'
+import {
+  copyText, issuePair, relayTokenStatus, revokeRelayToken, rotateRelayToken, stopPair,
+  type IssueResponse, type PairStateFrame, type RelayTokenStatus, type TunnelStatusFrame,
+} from './pair-api.ts'
 import { PhoneIcon } from './PhoneIcon.tsx'
 import { UpdateEntry } from './UpdateEntry.tsx'
 import css from './remote.module.css'
@@ -41,6 +44,10 @@ export function RemoteEntry({ wide, useWorkspaces, t }: RemoteEntryProps) {
   const [open, setOpen] = useState(false)
   const [state, setState] = useState<PanelState>({ kind: 'lan-required' })
   const [copied, setCopied] = useState(false)
+  const [relayToken, setRelayToken] = useState<RelayTokenStatus | undefined>(undefined)
+  const [relayTokenBusy, setRelayTokenBusy] = useState(false)
+  const [relayTokenCopied, setRelayTokenCopied] = useState(false)
+  const [relayTokenError, setRelayTokenError] = useState<string | undefined>(undefined)
   const eventSource = useRef<EventSource | undefined>(undefined)
 
   // The current workspace (the recent-workspace projection the shell's New
@@ -92,6 +99,7 @@ export function RemoteEntry({ wide, useWorkspaces, t }: RemoteEntryProps) {
     setOpen(true)
     const next = await mint()
     setState(next)
+    void relayTokenStatus().then(setRelayToken, () => { setRelayTokenError(t('relayToken.error')) })
     // Live status: the desktop panel mirrors the pairing service state. The
     // stream only makes sense in the ready state — on a failure banner the
     // events endpoint is unreachable too (loopback fence), so opening it
@@ -108,7 +116,7 @@ export function RemoteEntry({ wide, useWorkspaces, t }: RemoteEntryProps) {
         // Malformed frames are dropped; the snapshot on open is authoritative.
       }
     }
-  }, [mint])
+  }, [mint, t])
 
   const closePanel = useCallback(() => {
     closeEventSource()
@@ -164,6 +172,33 @@ export function RemoteEntry({ wide, useWorkspaces, t }: RemoteEntryProps) {
     })
   }, [state])
 
+  const handleRotateRelayToken = useCallback(() => {
+    setRelayTokenBusy(true)
+    setRelayTokenError(undefined)
+    void rotateRelayToken().then(
+      (value) => { setRelayToken(value); setRelayTokenBusy(false) },
+      () => { setRelayTokenError(t('relayToken.error')); setRelayTokenBusy(false) },
+    )
+  }, [t])
+
+  const handleRevokeRelayToken = useCallback(() => {
+    setRelayTokenBusy(true)
+    setRelayTokenError(undefined)
+    void revokeRelayToken().then(
+      (value) => { setRelayToken(value); setRelayTokenBusy(false) },
+      () => { setRelayTokenError(t('relayToken.error')); setRelayTokenBusy(false) },
+    )
+  }, [t])
+
+  const handleCopyRelayToken = useCallback(() => {
+    if (relayToken?.pairingUri === undefined) return
+    void copyText(relayToken.pairingUri).then((ok) => {
+      if (!ok) return
+      setRelayTokenCopied(true)
+      window.setTimeout(() => { setRelayTokenCopied(false) }, 1500)
+    })
+  }, [relayToken])
+
   return (
     <>
       <div className={css.entryRow} data-rail={wide ? undefined : 'rail'}>
@@ -177,10 +212,17 @@ export function RemoteEntry({ wide, useWorkspaces, t }: RemoteEntryProps) {
             t={t}
             state={state}
             copied={copied}
+            relayToken={relayToken}
+            relayTokenBusy={relayTokenBusy}
+            relayTokenCopied={relayTokenCopied}
+            relayTokenError={relayTokenError}
             onClose={closePanel}
             onStop={handleStop}
             onRefresh={handleRefresh}
             onCopy={handleCopy}
+            onRotateRelayToken={handleRotateRelayToken}
+            onRevokeRelayToken={handleRevokeRelayToken}
+            onCopyRelayToken={handleCopyRelayToken}
             onPickAddress={handlePickAddress}
             onPickPublic={handlePickPublic}
           />

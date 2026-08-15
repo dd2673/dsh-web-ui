@@ -12,6 +12,7 @@ import {
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { PairingPhase } from '../pairing.ts'
 import { formatClock, type TunnelStatusFrame } from './pair-api.ts'
+import type { RelayTokenStatus } from './pair-api.ts'
 import css from './remote.module.css'
 
 /** The panel's view state, owned by the entry component. */
@@ -44,10 +45,17 @@ export interface RemotePanelProps {
   t: TranslateNS<'remote'>
   state: PanelState
   copied: boolean
+  relayToken?: RelayTokenStatus
+  relayTokenBusy: boolean
+  relayTokenCopied: boolean
+  relayTokenError?: string
   onClose(): void
   onStop(): void
   onRefresh(): void
   onCopy(): void
+  onRotateRelayToken(): void
+  onRevokeRelayToken(): void
+  onCopyRelayToken(): void
   /** Re-mint the QR against a different LAN address. */
   onPickAddress(address: string): void
   /** Re-mint the QR against the configured public (tunneled) base. */
@@ -73,7 +81,11 @@ function statusOf(
  * @param props - copy, state, and actions.
  * @returns the panel element tree.
  */
-export function RemotePanel({ t, state, copied, onClose, onStop, onRefresh, onCopy, onPickAddress, onPickPublic }: RemotePanelProps) {
+export function RemotePanel({
+  t, state, copied, relayToken, relayTokenBusy, relayTokenCopied, relayTokenError,
+  onClose, onStop, onRefresh, onCopy, onRotateRelayToken, onRevokeRelayToken, onCopyRelayToken,
+  onPickAddress, onPickPublic,
+}: RemotePanelProps) {
   return (
     <div className={css.panel} role="dialog" aria-modal="true" aria-label={t('title')}>
       <div className={css.header}>
@@ -179,8 +191,55 @@ export function RemotePanel({ t, state, copied, onClose, onStop, onRefresh, onCo
               {copied ? t('action.copied') : t('action.copy')}
             </button>
           </div>
+
         </>
       )}
+      <section className={css.tokenCard} aria-label={t('relayToken.title')}>
+        <div>
+          <h3 className={css.tokenTitle}>{t('relayToken.title')}</h3>
+          <p className={css.tokenHint}>{t('relayToken.hint')}</p>
+        </div>
+        {relayToken?.pairingUri !== undefined ? (
+          <>
+            <p className={css.tokenOnce}>{t('relayToken.once')}</p>
+            <div className={css.relayQr} data-testid="relay-pair-qr">
+              <QRCodeSVG value={relayToken.pairingUri} size={176} level="M" marginSize={1} className={css.qr} />
+            </div>
+            <p className={css.tokenState}>
+              {t('relayToken.target', { relay: relayToken.relayUrl ?? '', host: relayToken.hostId ?? '' })}
+            </p>
+            <p className={relayToken.expired === true ? css.tokenError : css.tokenState}>
+              {relayToken.expired === true
+                ? t('relayToken.expired')
+                : t('relayToken.expires', { time: formatClock(relayToken.expiresAt ?? Date.now()) })}
+            </p>
+          </>
+        ) : (
+          <p className={css.tokenState}>
+            {relayToken?.expired === true
+              ? t('relayToken.expired')
+              : relayToken?.configured === true
+              ? t('relayToken.configured', { fingerprint: relayToken.fingerprint ?? '' })
+              : t('relayToken.none')}
+          </p>
+        )}
+        {relayTokenError !== undefined && <p className={css.tokenError}>{relayTokenError}</p>}
+        <div className={css.actions}>
+          <button type="button" className={css.action} disabled={relayTokenBusy} onClick={onRotateRelayToken}>
+            {relayTokenBusy ? t('relayToken.working') : t('relayToken.rotate')}
+          </button>
+          {relayToken?.pairingUri !== undefined && (
+            <button type="button" className={css.action} onClick={onCopyRelayToken}>
+              {relayTokenCopied ? t('action.copied') : t('relayToken.copy')}
+            </button>
+          )}
+          {relayToken?.configured === true && (
+            <button type="button" className={css.action} disabled={relayTokenBusy} onClick={onRevokeRelayToken}>
+              {t('relayToken.revoke')}
+            </button>
+          )}
+        </div>
+      </section>
     </div>
   )
 }
