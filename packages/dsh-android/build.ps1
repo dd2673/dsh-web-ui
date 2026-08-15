@@ -6,6 +6,7 @@ param(
   [string]$VersionName = '0.1.0',
   [ValidateRange(1, 2147483647)]
   [int]$VersionCode = 1,
+  [string]$ArtifactFileName = '',
   [string]$AppLinkHost = '',
   [string]$ReleaseKeystore = $env:DSH_ANDROID_RELEASE_KEYSTORE,
   [string]$ReleaseKeyAlias = $env:DSH_ANDROID_RELEASE_KEY_ALIAS,
@@ -13,9 +14,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($env:DSH_ANDROID_CANONICAL_BUILD -ne 'build-android.ps1') {
+  throw 'Use the repository root build-android.ps1 entrypoint; direct package builds are disabled'
+}
 $packageRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sourceRoot = Join-Path $packageRoot 'app\src\main'
 $buildRoot = Join-Path $packageRoot 'build'
+$distRoot = Join-Path $packageRoot 'dist'
 $jsQrRoot = Join-Path $packageRoot 'node_modules\jsqr'
 $jsQrBundle = Join-Path $jsQrRoot 'dist\jsQR.js'
 $jsQrLicense = Join-Path $jsQrRoot 'LICENSE'
@@ -28,10 +33,12 @@ $zipalign = Join-Path $tools 'zipalign.exe'
 $apksigner = Join-Path $tools 'apksigner.bat'
 $javac = Join-Path $JavaHome 'bin\javac.exe'
 $jar = Join-Path $JavaHome 'bin\jar.exe'
-$keytool = Join-Path $JavaHome 'bin\keytool.exe'
 
-foreach ($required in @($androidJar, $aapt2, $d8, $zipalign, $apksigner, $javac, $jar, $keytool)) {
+foreach ($required in @($androidJar, $aapt2, $d8, $zipalign, $apksigner, $javac, $jar)) {
   if (-not (Test-Path -LiteralPath $required)) { throw "Required Android build tool not found: $required" }
+}
+if ($ArtifactFileName -notmatch '^[a-z0-9][a-z0-9.-]+\.apk$') {
+  throw 'Canonical builds require a safe -ArtifactFileName ending in .apk'
 }
 foreach ($required in @($jsQrBundle, $jsQrLicense)) {
   if (-not (Test-Path -LiteralPath $required)) { throw "Run pnpm install before building; required bundled dependency is missing: $required" }
@@ -54,6 +61,9 @@ if ($BuildType -eq 'Release') {
 }
 
 if (Test-Path -LiteralPath $buildRoot) { Remove-Item -LiteralPath $buildRoot -Recurse -Force }
+$null = New-Item -ItemType Directory -Path $distRoot -Force
+$final = Join-Path $distRoot $ArtifactFileName
+if (Test-Path -LiteralPath $final) { Remove-Item -LiteralPath $final -Force }
 $resOut = New-Item -ItemType Directory -Path (Join-Path $buildRoot 'res') -Force
 $genOut = New-Item -ItemType Directory -Path (Join-Path $buildRoot 'gen') -Force
 $classOut = New-Item -ItemType Directory -Path (Join-Path $buildRoot 'classes') -Force
@@ -105,6 +115,10 @@ if ($LASTEXITCODE -ne 0) { throw 'javac failed' }
 $classFiles = (Get-ChildItem -LiteralPath $classOut -Recurse -Filter '*.class').FullName
 & $d8 --lib $androidJar --min-api 26 --output $dexOut $classFiles
 if ($LASTEXITCODE -ne 0) { throw 'd8 failed' }
+# ZIP entry timestamps are part of the APK bytes. Normalize generated dex files
+# so identical source and toolchains produce identical signed artifacts.
+$fixedZipTimestamp = [DateTime]::new(2000, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)
+Get-ChildItem -LiteralPath $dexOut -Recurse -File | ForEach-Object { $_.LastWriteTimeUtc = $fixedZipTimestamp }
 & $jar uf $unsigned -C $dexOut 'classes.dex'
 if ($LASTEXITCODE -ne 0) { throw 'adding classes.dex failed' }
 
@@ -122,16 +136,14 @@ if ($BuildType -eq 'Debug') {
   $storePasswordSpec = 'pass:android'
   $keyPasswordSpec = 'pass:android'
   if (-not (Test-Path -LiteralPath $keystore)) {
-    New-Item -ItemType Directory -Path (Split-Path -Parent $keystore) -Force | Out-Null
-    & $keytool -genkeypair -keystore $keystore -storepass android -keypass android -alias $keyAlias -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=DSH Remote Debug,O=Development,C=XX'
-    if ($LASTEXITCODE -ne 0) { throw 'debug keystore creation failed' }
+    throw 'Canonical debug keystore is missing; restore packages/dsh-android/.debug/dsh-remote-debug.keystore instead of generating a new signing identity'
   }
 }
 
-$suffix = if ($BuildType -eq 'Release') { $VersionName } else { 'debug' }
-$final = Join-Path $apkOut "dsh-remote-$suffix.apk"
 Copy-Item -LiteralPath $aligned -Destination $final
-& $apksigner sign --ks $keystore --ks-pass $storePasswordSpec --key-pass $keyPasswordSpec --ks-key-alias $keyAlias $final
+# minSdk 26 supports APK Signature Scheme v2. Disabling v1 also removes its
+# wall-clock META-INF entries, while v2/v3 keep install and update integrity.
+& $apksigner sign --v1-signing-enabled false --v2-signing-enabled true --v3-signing-enabled true --v4-signing-enabled false --ks $keystore --ks-pass $storePasswordSpec --key-pass $keyPasswordSpec --ks-key-alias $keyAlias $final
 if ($LASTEXITCODE -ne 0) { throw 'APK signing failed' }
 & $apksigner verify --verbose $final
 if ($LASTEXITCODE -ne 0) { throw 'APK verification failed' }

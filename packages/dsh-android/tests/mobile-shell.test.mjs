@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -14,8 +15,12 @@ const mainRoot = join(root, '..')
 const debugManifest = readFileSync(join(mainRoot, 'AndroidManifest.xml'), 'utf8')
 const releaseManifest = readFileSync(join(mainRoot, 'AndroidManifest.release.xml'), 'utf8')
 const activity = readFileSync(join(mainRoot, 'java', 'org', 'dshcommunity', 'remote', 'MainActivity.java'), 'utf8')
-const buildScript = readFileSync(join(root, '..', '..', '..', '..', 'build.ps1'), 'utf8')
-const packageJson = JSON.parse(readFileSync(join(root, '..', '..', '..', '..', 'package.json'), 'utf8'))
+const packageRoot = join(root, '..', '..', '..', '..')
+const repoRoot = join(packageRoot, '..', '..')
+const buildScript = readFileSync(join(packageRoot, 'build.ps1'), 'utf8')
+const buildEntrypoint = readFileSync(join(repoRoot, 'build-android.ps1'), 'utf8')
+const buildProfile = JSON.parse(readFileSync(join(repoRoot, 'android-build-profile.json'), 'utf8'))
+const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
 
 test('conversation is a full-screen page without a duplicate bottom navigation', () => {
   assert.match(html, /<section id="sessionPage" class="session-page" hidden/)
@@ -112,7 +117,7 @@ test('new session starts from the task page without inheriting an old session', 
   assert.match(app, /const historySeq = \+\+state\.sessionHistorySeq/)
   assert.match(app, /const historyIsCurrent = \(\) => historySeq === state\.sessionHistorySeq/)
   assert.match(app, /if \(!historyIsCurrent\(\)\) return/)
-  assert.match(app, /catch \(error\) \{\s*if \(historyIsCurrent\(\)\)/)
+  assert.match(app, /catch \(error\) \{\s*if \(showError && historyIsCurrent\(\)\)/)
 })
 
 test('task actions follow the standard left-swipe and right-side action layout', () => {
@@ -165,6 +170,17 @@ test('queue dock follows authoritative mux snapshots and exposes all queue actio
   assert.match(app, /function moveQueuedItem\(/)
 })
 
+test('queue mirror re-baselines on relay generations and queue action conflicts', () => {
+  assert.match(app, /function requestEventsBaseline\(\)/)
+  assert.match(app, /type: 'stream\.subscribe'/)
+  assert.match(app, /stream: 'events\.mux'/)
+  assert.match(app, /frame\.type === 'session\/subscribed'/)
+  assert.match(app, /state\.queuesBySession\.delete\(frame\.sessionId\)/)
+  assert.match(app, /void refreshOpenSessionHistory\(frame\.sessionId, false\)/)
+  assert.match(app, /error\.code === 'queue-item-not-found'/)
+  assert.match(app, /requestEventsBaseline\(\)[\s\S]{0,100}renderQueuePanel\(\)/)
+})
+
 test('queue dock defaults to a compact collapsed and accessible icon-only layout', () => {
   assert.match(app, /queueExpanded: false/)
   assert.match(html, /id="toggleQueue"[^>]*aria-controls="queueList"[^>]*aria-expanded="false"/)
@@ -205,13 +221,18 @@ test('SSH failures are classified instead of dumping host stack traces', () => {
   assert.doesNotMatch(app, /sshList'\)\.textContent = error\.message/)
 })
 
-test('release pairing uses a verified HTTPS App Link while debug keeps the test scheme', () => {
+test('pairing keeps external App Links strict while explicit debug scans accept same-domain HTTPS', () => {
   assert.match(debugManifest, /android:scheme="dshremote"/)
   assert.match(releaseManifest, /android:autoVerify="true"/)
   assert.match(releaseManifest, /android:scheme="https"/)
   assert.match(releaseManifest, /android:pathPrefix="\/dsh-remote\/pair"/)
   assert.match(releaseManifest, /org\.dshcommunity\.remote\.APP_LINK_HOST/)
   assert.doesNotMatch(releaseManifest, /dshremote:\/\/pair/)
+  assert.match(activity, /boolean scannedHttpsPair = allowRetarget[\s\S]*trustedAppLinkHost == null[\s\S]*"https"\.equals\(uri\.getScheme\(\)\)/)
+  assert.match(activity, /if \(!customPair && !verifiedPair && !scannedHttpsPair\) return false/)
+  assert.match(activity, /\(verifiedPair \|\| scannedHttpsPair\)[\s\S]*relayUri\.getHost\(\)\.equalsIgnoreCase\(uri\.getHost\(\)\)/)
+  assert.match(activity, /acceptPairingUri\(uri, false\)/)
+  assert.match(activity, /acceptPairingUri\(Uri\.parse\(value\), true\)/)
 })
 
 test('APK WebView stays on the bundled asset and cannot consume query credentials', () => {
@@ -229,6 +250,8 @@ test('settings provides an in-app QR scanner with native credential validation',
   assert.match(app, /window\.jsQR\(/)
   assert.match(app, /navigator\.mediaDevices\.getUserMedia/)
   assert.match(app, /DshRemoteNative\.acceptPairingUri\(value\)/)
+  assert.match(app, /二维码格式无效，或配对链接与 Relay 域名不一致/)
+  assert.doesNotMatch(app, /二维码无效、已过期，或不属于当前 Relay/)
   assert.doesNotMatch(app, /BarcodeDetector/)
   assert.match(activity, /PermissionRequest\.RESOURCE_VIDEO_CAPTURE/)
   assert.match(activity, /@JavascriptInterface public boolean acceptPairingUri/)
@@ -252,10 +275,32 @@ test('QR decoder is pinned, integrity checked and bundled with its license', () 
   assert.match(buildScript, /Join-Path \$assetsOut 'jsqr\.LICENSE\.txt'/)
 })
 
-test('launcher and in-app brand use the neutral remote companion mark', () => {
+test('launcher and in-app brand use the canonical black whale mark', () => {
   assert.match(debugManifest, /android:icon="@mipmap\/ic_launcher"/)
   assert.match(releaseManifest, /android:icon="@mipmap\/ic_launcher"/)
   assert.match(html, /class="brand-mark"[^>]*>[\s\S]*remote-link\.svg/)
+  assert.match(readFileSync(join(mainRoot, 'res', 'drawable', 'ic_launcher_foreground.xml'), 'utf8'), /android:fillColor="#FF000000"/)
+  assert.match(readFileSync(join(root, 'remote-link.svg'), 'utf8'), /aria-label="DeepSeek"[\s\S]*fill="#000"/)
+})
+
+test('canonical Android entrypoint pins package, label, icon, version and debug signer', () => {
+  assert.equal(buildProfile.packageName, 'org.dshcommunity.remote')
+  assert.equal(buildProfile.applicationLabel, 'DSH Remote Companion')
+  assert.equal(buildProfile.versionName, packageJson.version)
+  assert.equal(buildProfile.brandResources.length, 4)
+  for (const resource of buildProfile.brandResources) {
+    const actualSha256 = createHash('sha256').update(readFileSync(join(repoRoot, resource.path))).digest('hex').toUpperCase()
+    assert.equal(resource.sha256, actualSha256)
+  }
+  assert.match(buildProfile.debugCertificateSha256, /^[0-9A-F]{64}$/)
+  assert.match(buildEntrypoint, /Android build identity mismatch/)
+  assert.match(buildEntrypoint, /apksigner\.bat'\) verify --print-certs/)
+  assert.match(buildScript, /Use the repository root build-android\.ps1 entrypoint/)
+  assert.doesNotMatch(buildScript, /-genkeypair/)
+  assert.match(buildScript, /LastWriteTimeUtc = \$fixedZipTimestamp/)
+  assert.match(buildScript, /--v1-signing-enabled false --v2-signing-enabled true --v3-signing-enabled true --v4-signing-enabled false/)
+  assert.match(buildEntrypoint, /Where-Object \{ \$_\.Name -match '\\\.\(\?:apk\|idsig\)\$' \}/)
+  assert.match(buildEntrypoint, /Remove-Item -LiteralPath \$intermediateRoot -Recurse -Force/)
 })
 
 test('release QR validation accepts only its declared HTTPS relay host', () => {

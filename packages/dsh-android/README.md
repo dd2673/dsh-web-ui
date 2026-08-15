@@ -16,9 +16,14 @@ DSH Remote Companion is a community-maintained third-party Android companion for
 Build and install a Debug APK only for local development or controlled emulator validation.
 
 ```powershell
-.\build.ps1
+Set-Location ..\..
+.\build-android.ps1
 ```
 
+The signed APK is written to `packages/dsh-android/dist/`. This repository-root
+script is the only supported build entrypoint: it pins and verifies the package
+name, app label, launcher icon, version, artifact name, and signing certificate.
+Each build removes older APK exports and keeps only its verified artifact.
 Do not publicly distribute a Debug APK.
 
 ## Config
@@ -48,7 +53,7 @@ The emulator flow is a local validation aid and does not establish Release APK a
 
 ## Pairing contract
 
-Debug and loopback E2E may use `dshremote://pair`. A Release APK requires `https://<app-link-host>/dsh-remote/pair?...`, an App Link host matching the relay domain, and a valid `/.well-known/assetlinks.json` for the release signing certificate.
+Loopback E2E may use `dshremote://pair`. The Debug in-app scanner also accepts an explicitly scanned HTTPS pair link only when its host matches the embedded Relay URL; external HTTPS intents remain disabled. A Release APK requires `https://<app-link-host>/dsh-remote/pair?...`, an App Link host matching the relay domain, and a valid `/.well-known/assetlinks.json` for the release signing certificate.
 
 ## Public demo media
 
@@ -69,7 +74,8 @@ $env:DSH_ANDROID_RELEASE_KEYSTORE = 'D:\secure\dsh-remote-release.jks'
 $env:DSH_ANDROID_RELEASE_KEY_ALIAS = 'dsh-remote-companion-v1'
 $env:DSH_ANDROID_RELEASE_STORE_PASSWORD = '<store-password>'
 $env:DSH_ANDROID_RELEASE_KEY_PASSWORD = '<key-password>'
-.\build.ps1 -BuildType Release -VersionName 1.0.0 -VersionCode 1 -AppLinkHost relay.example.com
+$env:DSH_ANDROID_RELEASE_CERT_SHA256 = '<release-certificate-sha256>'
+.\build-android.ps1 -Variant Release -AppLinkHost relay.example.com
 ```
 
 ## Known limitations

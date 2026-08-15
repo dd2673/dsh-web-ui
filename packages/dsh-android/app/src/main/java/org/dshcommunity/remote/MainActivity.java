@@ -196,7 +196,14 @@ public final class MainActivity extends Activity {
         && trustedAppLinkHost != null
         && trustedAppLinkHost.equalsIgnoreCase(uri.getHost())
         && "/dsh-remote/pair".equals(uri.getPath());
-    if (!customPair && !verifiedPair) return false;
+    // Debug builds have no verified App Link host. An explicit in-app scan may
+    // still consume the desktop plugin's same-domain HTTPS QR, while external
+    // intents remain restricted to the release App Link contract.
+    boolean scannedHttpsPair = allowRetarget
+        && trustedAppLinkHost == null
+        && "https".equals(uri.getScheme())
+        && "/dsh-remote/pair".equals(uri.getPath());
+    if (!customPair && !verifiedPair && !scannedHttpsPair) return false;
     try {
       String relay = uri.getQueryParameter("relay");
       String host = uri.getQueryParameter("host");
@@ -213,7 +220,10 @@ public final class MainActivity extends Activity {
           || relayUri.getHost() == null
           || relayUri.getUserInfo() != null
           || relayUri.getFragment() != null) return false;
-      if (verifiedPair && (relayUri.getHost() == null || !relayUri.getHost().equalsIgnoreCase(uri.getHost()))) return false;
+      if ((verifiedPair || scannedHttpsPair)
+          && (uri.getUserInfo() != null
+              || uri.getFragment() != null
+              || !relayUri.getHost().equalsIgnoreCase(uri.getHost()))) return false;
       JSONObject existing = new JSONObject(secureConfig.load());
       String existingRelay = existing.optString("relay", "");
       String existingHost = existing.optString("hostId", "");

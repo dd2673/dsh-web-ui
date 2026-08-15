@@ -16,10 +16,11 @@ DSH Remote Companion 是 DeepSeek Harness 的社区维护第三方 Android 配�
 仅为本地开发或受控模拟器验证构建和安装 Debug APK。
 
 ```powershell
-.\build.ps1
+Set-Location ..\..
+.\build-android.ps1
 ```
 
-不得公开分发 Debug APK。
+签名后的 APK 固定输出到 `packages/dsh-android/dist/`。仓库根目录的这个脚本是唯一支持的构建入口：它会固定并校验包名、应用名称、启动图标、版本、产物名和签名证书。每次构建会删除旧 APK，只保留本次验签通过的产物。不得公开分发 Debug APK。
 
 ## 配置
 
@@ -48,7 +49,7 @@ pnpm --filter @linxin666/dsh-android e2e:emulator -- http://127.0.0.1:9223
 
 ## 配对契约
 
-Debug 和 loopback E2E 可以使用 `dshremote://pair`。Release APK 必须使用 `https://<app-link-host>/dsh-remote/pair?...`，App Link host 必须与 relay 域名相同，并且该域名必须为 release 签名证书提供有效的 `/.well-known/assetlinks.json`。
+Loopback E2E 可以使用 `dshremote://pair`。Debug 的应用内扫码也接受用户主动扫描的 HTTPS 配对链接，但链接域名必须与其中的 Relay 域名相同；外部 HTTPS intent 仍不开放。Release APK 必须使用 `https://<app-link-host>/dsh-remote/pair?...`，App Link host 必须与 relay 域名相同，并且该域名必须为 release 签名证书提供有效的 `/.well-known/assetlinks.json`。
 
 ## 公开演示素材
 
@@ -69,7 +70,8 @@ $env:DSH_ANDROID_RELEASE_KEYSTORE = 'D:\secure\dsh-remote-release.jks'
 $env:DSH_ANDROID_RELEASE_KEY_ALIAS = 'dsh-remote-companion-v1'
 $env:DSH_ANDROID_RELEASE_STORE_PASSWORD = '<store-password>'
 $env:DSH_ANDROID_RELEASE_KEY_PASSWORD = '<key-password>'
-.\build.ps1 -BuildType Release -VersionName 1.0.0 -VersionCode 1 -AppLinkHost relay.example.com
+$env:DSH_ANDROID_RELEASE_CERT_SHA256 = '<release-certificate-sha256>'
+.\build-android.ps1 -Variant Release -AppLinkHost relay.example.com
 ```
 
 ## 已知限制

@@ -148,7 +148,7 @@
       connect()
       return true
     }
-    $('scanStatus').textContent = '二维码无效、已过期，或不属于当前 Relay。'
+    $('scanStatus').textContent = '二维码格式无效，或配对链接与 Relay 域名不一致。'
     return false
   }
 
@@ -284,6 +284,11 @@
     }
     if (message.type === 'capabilities') {
       state.capabilities = new Set(Array.isArray(message.methods) ? message.methods : [])
+      // A relay reconnect starts a new mux generation. Queue snapshots are
+      // transient, so no item from the prior generation may survive it.
+      state.queuesBySession.clear()
+      renderQueuePanel()
+      requestEventsBaseline()
       void refreshAll()
       return
     }
@@ -297,7 +302,12 @@
       state.pending.delete(message.messageId)
       const envelope = message.payload
       if (envelope?.result?.ok === true) deferred.resolve(envelope.result.value)
-      else deferred.reject(new Error(envelope?.result?.error?.message || '远程调用失败'))
+      else {
+        const failure = envelope?.result?.error
+        const error = new Error(failure?.message || '远程调用失败')
+        if (typeof failure?.code === 'string') error.code = failure.code
+        deferred.reject(error)
+      }
       return
     }
     if (message.type === 'event') handleMux(message.payload)
@@ -363,6 +373,17 @@
   function rejectPending(error) {
     for (const deferred of state.pending.values()) deferred.reject(error)
     state.pending.clear()
+  }
+
+  function requestEventsBaseline() {
+    if (!state.socket || state.socket.readyState !== WebSocket.OPEN || !state.authenticated) return false
+    state.socket.send(JSON.stringify({
+      v: 1,
+      type: 'stream.subscribe',
+      stream: 'events.mux',
+      messageId: `mux-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    }))
+    return true
   }
 
   function lifecycle(action) {
@@ -571,10 +592,8 @@
   }
 
   async function openSession(item) {
-    const historySeq = ++state.sessionHistorySeq
-    const historyIsCurrent = () => historySeq === state.sessionHistorySeq
-      && state.sessionPageOpen && state.currentSession?.sessionId === item.sessionId
     state.currentSession = item
+    state.historyEvents = []
     state.promptMode = 'queue'
     state.sessionPageOpen = true
     applyProjectionValues(item?.projections?.values || {}, true, item?.projections?.asOfSeq)
@@ -592,16 +611,40 @@
     resizePromptInput()
     updateComposerLabels()
     void refreshSessionControls()
+    await refreshOpenSessionHistory(item.sessionId)
+  }
+
+  function mergeHistoryEvents(history, live) {
+    const merged = Array.isArray(history) ? [...history] : []
+    const known = new Set(merged.map(entry => (entry?.event || entry)?.seq).filter(Number.isInteger))
+    for (const entry of live || []) {
+      const seq = (entry?.event || entry)?.seq
+      if (Number.isInteger(seq) && known.has(seq)) continue
+      merged.push(entry)
+      if (Number.isInteger(seq)) known.add(seq)
+    }
+    merged.sort((left, right) => {
+      const leftSeq = (left?.event || left)?.seq
+      const rightSeq = (right?.event || right)?.seq
+      return Number.isInteger(leftSeq) && Number.isInteger(rightSeq) ? leftSeq - rightSeq : 0
+    })
+    return merged
+  }
+
+  async function refreshOpenSessionHistory(sessionId, showError = true) {
+    const historySeq = ++state.sessionHistorySeq
+    const historyIsCurrent = () => historySeq === state.sessionHistorySeq
+      && state.sessionPageOpen && state.currentSession?.sessionId === sessionId
     try {
-      const history = await rpc('session.history', { sessionId: item.sessionId, maxMessages: 40 })
+      const history = await rpc('session.history', { sessionId, maxMessages: 40 })
       if (!historyIsCurrent()) return
-      state.historyEvents = history?.events || []
+      state.historyEvents = mergeHistoryEvents(history?.events || [], state.historyEvents)
       state.permissions = history?.projections?.values?.permissions || null
       applyProjectionValues(history?.projections?.values || {}, false, history?.projections?.asOfSeq)
       updateComposerLabels()
-      renderHistory(history?.events || [])
+      renderHistory(state.historyEvents)
     } catch (error) {
-      if (historyIsCurrent()) $('historyList').replaceChildren(messageNode('assistant', error.message))
+      if (showError && historyIsCurrent()) $('historyList').replaceChildren(messageNode('assistant', error.message))
     }
   }
 
@@ -1441,8 +1484,15 @@
     try {
       await rpc('session.updateQueue', { sessionId: state.currentSession.sessionId, itemId, action })
       $('sessionMeta').textContent = action.kind === 'steer' ? '排队消息已转为引导' : action.kind === 'remove' ? '排队消息已删除' : '排队消息已更新'
-    } catch (error) { $('sessionMeta').textContent = `排队操作失败：${error.message}` }
-    finally { state.queueBusy = false; renderQueuePanel() }
+    } catch (error) {
+      $('sessionMeta').textContent = error.code === 'queue-item-not-found'
+        ? '该消息已开始处理，正在同步最新队列'
+        : `排队操作失败：${error.message}`
+    } finally {
+      state.queueBusy = false
+      requestEventsBaseline()
+      renderQueuePanel()
+    }
   }
 
   async function moveQueuedItem(itemId, direction) {
@@ -1464,14 +1514,26 @@
         throw error
       }
       $('sessionMeta').textContent = '排队顺序已更新'
-    } catch (error) { $('sessionMeta').textContent = `排序失败，已重新同步：${error.message}` }
-    finally { state.queueBusy = false; renderQueuePanel() }
+    } catch (error) { $('sessionMeta').textContent = `排序失败，正在同步最新队列：${error.message}` }
+    finally {
+      state.queueBusy = false
+      requestEventsBaseline()
+      renderQueuePanel()
+    }
   }
 
   function handleMux(envelope) {
     const frame = envelope?.payload
     if (!frame) return
-    if (frame.type === 'approval/requested') {
+    if (frame.type === 'session/subscribed') {
+      // This is the official mux-generation boundary. The Host omits an empty
+      // queue baseline, so retaining the previous value creates phantom work.
+      state.queuesBySession.delete(frame.sessionId)
+      if (state.currentSession?.sessionId === frame.sessionId) {
+        renderQueuePanel()
+        if (state.sessionPageOpen) void refreshOpenSessionHistory(frame.sessionId, false)
+      }
+    } else if (frame.type === 'approval/requested') {
       state.pendingApproval = { rpcId: envelope.rpcId, ...frame }
       renderApproval()
     } else if (frame.type === 'approval/resolved' && state.pendingApproval?.approvalId === frame.approvalId) {

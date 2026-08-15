@@ -97,6 +97,48 @@ describe('relay gateway', () => {
     gateway.stop()
   })
 
+  it('restarts the authoritative mux when a device subscribes after connecting', async () => {
+    const socket = new FakeSocket()
+    const apiProxy = proxy()
+    const mux = vi.fn(() => (async function* () {
+      yield { rpcId: 'baseline', payload: { type: 'session/subscribed', sessionId: 's1', lastSeq: 4 } }
+    })())
+    apiProxy.events.mux = mux
+    const gateway = new RelayGateway({
+      apiProxy,
+      relayUrl: 'ws://127.0.0.1:3090/relay',
+      hostId: 'desktop',
+      token: 'host-token-long-enough-for-the-relay',
+      webSocketFactory: () => socket,
+    })
+    gateway.start()
+    socket.open()
+    socket.receive({ v: 1, type: 'hello.ack' })
+    await tick()
+    expect(mux).toHaveBeenCalledTimes(1)
+
+    socket.receive({
+      v: 1,
+      type: 'stream.subscribe',
+      stream: 'events.mux',
+      deviceId: 'phone',
+      messageId: 'mux-phone',
+    })
+    await tick()
+    expect(mux).toHaveBeenCalledTimes(2)
+    expect(socket.sent).toContainEqual(expect.objectContaining({
+      type: 'ack',
+      deviceId: 'phone',
+      messageId: 'mux-phone',
+      state: 'subscribed',
+    }))
+    expect(socket.sent).toContainEqual(expect.objectContaining({
+      type: 'event',
+      payload: expect.objectContaining({ payload: expect.objectContaining({ type: 'session/subscribed' }) }),
+    }))
+    gateway.stop()
+  })
+
   it('refuses a non-TLS internet relay URL', () => {
     expect(() => validateRelayUrl('ws://relay.example.com/relay')).toThrow(/wss/)
     expect(validateRelayUrl('wss://relay.example.com')).toBe('wss://relay.example.com/relay')

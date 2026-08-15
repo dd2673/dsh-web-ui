@@ -39,6 +39,7 @@ interface RelayMessage {
   deviceId?: unknown
   messageId?: unknown
   method?: unknown
+  stream?: unknown
   payload?: unknown
   chunkIndex?: unknown
   chunkCount?: unknown
@@ -223,6 +224,11 @@ export class RelayGateway {
     }
     if (message.type === 'stream.subscribe' || message.type === 'stream.unsubscribe') {
       if (typeof message.deviceId !== 'string' || typeof message.messageId !== 'string') return
+      if (message.stream !== 'events.mux') return
+      // A device may connect after the Host mux emitted its baseline. Restart
+      // the mux so session/subscribed and all non-empty transient snapshots are
+      // replayed from the Host authority instead of cached by the relay.
+      if (message.type === 'stream.subscribe') this.#startMux()
       this.#send({
         v: PROTOCOL_VERSION,
         type: 'ack',

@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import { extname } from 'node:path'
 
 const endpoint = process.argv[2] || 'http://127.0.0.1:9223'
 const targets = await fetch(`${endpoint}/json`).then(response => response.json())
@@ -35,26 +37,44 @@ async function evaluate(expression) {
 }
 
 await send('Runtime.enable')
+const inspectOnly = process.env.DSH_INSPECT_ONLY === '1'
 await evaluate(`(() => {
+  const scan = document.getElementById('scanDialog')
+  if (${inspectOnly} && scan.open) scan.close()
   const settings = document.getElementById('settingsDialog')
   if (!settings.open) document.getElementById('settingsButton').click()
-  document.getElementById('scanQrButton').click()
+  if (!${inspectOnly}) document.getElementById('scanQrButton').click()
 })()`)
 await new Promise(resolve => setTimeout(resolve, 1800))
 
-const result = await evaluate(`(() => ({
-  scanOpen: document.getElementById('scanDialog').open,
-  status: document.getElementById('scanStatus').textContent,
-  credentialInputs: document.querySelectorAll('#settingsDialog input:not([type=file])').length,
-  brandSrc: document.querySelector('.brand-mark img')?.getAttribute('src'),
-  jsQrType: typeof window.jsQR
-}))()`)
+const result = await evaluate(`(() => {
+  let nativeSummary = { configured: false }
+  try {
+    const config = JSON.parse(window.DshRemoteNative?.loadConfig?.() || '{}')
+    nativeSummary = {
+      configured: Boolean(config.relay && config.hostId && config.token),
+      hostId: typeof config.hostId === 'string' ? config.hostId : '',
+      relayProtocol: typeof config.relay === 'string' ? new URL(config.relay).protocol : '',
+      tokenLength: typeof config.token === 'string' ? config.token.length : 0,
+    }
+  } catch (_) {}
+  return {
+    scanOpen: document.getElementById('scanDialog').open,
+    status: document.getElementById('scanStatus').textContent,
+    bindingStatus: document.getElementById('bindingStatus').textContent,
+    connectionText: document.getElementById('connectionText').textContent,
+    credentialInputs: document.querySelectorAll('#settingsDialog input:not([type=file])').length,
+    brandSrc: document.querySelector('.brand-mark img')?.getAttribute('src'),
+    jsQrType: typeof window.jsQR,
+    nativeSummary,
+  }
+})()`)
 
-assert.equal(result.scanOpen, true)
+assert.equal(result.scanOpen, !inspectOnly)
 assert.equal(result.credentialInputs, 0)
 assert.equal(result.brandSrc, 'remote-link.svg')
 assert.equal(result.jsQrType, 'function')
-assert.doesNotMatch(result.status, /解码器加载失败|扫码仅在 Android App 内可用/)
+if (!inspectOnly) assert.doesNotMatch(result.status, /解码器加载失败|扫码仅在 Android App 内可用/)
 
 if (process.env.DSH_TEST_QR_SVG_B64) {
   const qrSvg = Buffer.from(process.env.DSH_TEST_QR_SVG_B64, 'base64').toString('utf8')
@@ -70,8 +90,44 @@ if (process.env.DSH_TEST_QR_SVG_B64) {
     return { status: document.getElementById('scanStatus').textContent, scanOpen: document.getElementById('scanDialog').open }
   })()`)
   assert.equal(imageResult.scanOpen, true)
-  assert.match(imageResult.status, /二维码无效、已过期，或不属于当前 Relay/)
+  assert.match(imageResult.status, /二维码格式无效，或配对链接与 Relay 域名不一致/)
   result.imageDecode = 'recognized-and-rejected-by-native-validator'
+}
+
+if (process.env.DSH_TEST_QR_IMAGE_PATH) {
+  const imagePath = process.env.DSH_TEST_QR_IMAGE_PATH
+  const imageBase64 = (await readFile(imagePath)).toString('base64')
+  const imageType = extname(imagePath).toLowerCase() === '.jpg' || extname(imagePath).toLowerCase() === '.jpeg'
+    ? 'image/jpeg'
+    : 'image/png'
+  const pairingResult = await evaluate(`(async () => {
+    const bytes = Uint8Array.from(atob(${JSON.stringify(imageBase64)}), character => character.charCodeAt(0))
+    const file = new File([bytes], 'pairing-acceptance.${imageType === 'image/jpeg' ? 'jpg' : 'png'}', { type: ${JSON.stringify(imageType)} })
+    const transfer = new DataTransfer()
+    transfer.items.add(file)
+    const input = document.getElementById('scanImageInput')
+    input.files = transfer.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    const deadline = Date.now() + 10000
+    while (document.getElementById('scanDialog').open && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    await new Promise(resolve => setTimeout(resolve, 1500))
+    if (!document.getElementById('scanDialog').open && !document.getElementById('settingsDialog').open) {
+      document.getElementById('settingsButton').click()
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    return {
+      scanOpen: document.getElementById('scanDialog').open,
+      scanStatus: document.getElementById('scanStatus').textContent,
+      bindingStatus: document.getElementById('bindingStatus').textContent,
+      connectionText: document.getElementById('connectionText').textContent,
+      hostLabel: document.getElementById('hostLabel').textContent,
+    }
+  })()`)
+  assert.equal(pairingResult.scanOpen, false, `pairing image was rejected locally: ${pairingResult.scanStatus}`)
+  assert.match(pairingResult.bindingStatus, /^已绑定：/)
+  result.pairingImage = pairingResult
 }
 
 socket.close()
