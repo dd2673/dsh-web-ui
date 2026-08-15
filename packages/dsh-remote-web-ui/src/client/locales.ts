@@ -48,6 +48,8 @@ export const zh = {
   'relayToken.copy': '复制连接链接',
   'relayToken.working': '同步中…',
   'relayToken.error': '连接凭据尚未得到 Relay 确认，请检查 Relay 地址和网络后重试。',
+  'relayUrl.required': '请先填写并保存 Relay 服务地址。',
+  'relayUrl.notExposed': '当前部署未开放此设置，请在 ~/.dsh/settings.yaml 中配置 remote-web-ui.relayUrl 后重启。',
   'close.label': '关闭移动端远程控制面板',
   // 插件设置卡片（settings.plugin.item 席位）。
   'settings.title': '移动端远程控制',
@@ -87,6 +89,7 @@ export const zh = {
   'settings.unsaved': '未保存',
   'settings.saveFailed': '部署未接受这些值，已保留供你修改。',
   'settings.invalidNumber': '请输入数字，留空则使用默认值。',
+  'settings.invalidRelayUrl': '请输入 wss:// 地址；ws:// 仅限 localhost 或 127.0.0.1。',
   // 更新面板（侧边栏更新按钮）。
   'update.label': '检查更新',
   'update.title': '检查更新',
@@ -174,6 +177,8 @@ export const en = {
   'relayToken.copy': 'Copy connection link',
   'relayToken.working': 'Syncing…',
   'relayToken.error': 'The Relay has not confirmed this credential. Check the Relay URL and network, then retry.',
+  'relayUrl.required': 'Enter and save the Relay service URL first.',
+  'relayUrl.notExposed': 'This deployment does not expose this setting. Configure remote-web-ui.relayUrl in ~/.dsh/settings.yaml, then restart.',
   'close.label': 'Close mobile remote control panel',
   // Plugin settings card (the `settings.plugin.item` seat).
   'settings.title': 'Mobile remote control',
@@ -213,6 +218,7 @@ export const en = {
   'settings.unsaved': 'Unsaved',
   'settings.saveFailed': 'The deployment did not accept these values; they were left for you to correct.',
   'settings.invalidNumber': 'Enter a number, or leave blank to use the default.',
+  'settings.invalidRelayUrl': 'Enter a wss:// URL; ws:// is allowed only for localhost or 127.0.0.1.',
   // Update panel (the sidebar update trigger).
   'update.label': 'Check for updates',
   'update.title': 'Check for updates',

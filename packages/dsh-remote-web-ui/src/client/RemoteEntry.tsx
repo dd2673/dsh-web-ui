@@ -9,9 +9,10 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { PairingPhase } from '../pairing.ts'
 import { RemotePanel, type PanelState } from './RemotePanel.tsx'
+import type { RemoteSettingsCardFace } from './RemoteSettingsCard.tsx'
 import {
   copyText, issuePair, relayTokenStatus, revokeRelayToken, rotateRelayToken, stopPair,
   type IssueResponse, type PairStateFrame, type RelayTokenStatus, type TunnelStatusFrame,
@@ -20,8 +21,10 @@ import { PhoneIcon } from './PhoneIcon.tsx'
 import { UpdateEntry } from './UpdateEntry.tsx'
 import css from './remote.module.css'
 
-/** Entry props: the sidebar column state + the standard locale seat. */
-export type RemoteEntryProps = PropsRuntime<'sidebar.remote'> & PropsLocale<'remote'>
+/** Entry props: sidebar runtime, locale, and the shared remote settings form. */
+export type RemoteEntryProps = PropsRuntime<'sidebar.remote'>
+  & PropsLocale<'remote'>
+  & InjectFace<RemoteSettingsCardFace>
 
 /** Apply one status frame onto the current ready state. */
 function mergeFrame(state: PanelState, frame: PairStateFrame): PanelState {
@@ -40,7 +43,7 @@ function mergeFrame(state: PanelState, frame: PairStateFrame): PanelState {
  * @param props - composed slot props (contract in this package).
  * @returns the entry element tree.
  */
-export function RemoteEntry({ wide, useWorkspaces, t }: RemoteEntryProps) {
+export function RemoteEntry({ wide, useWorkspaces, useRemoteSettingsCard, edit, saveRelayUrl, t }: RemoteEntryProps) {
   const [open, setOpen] = useState(false)
   const [state, setState] = useState<PanelState>({ kind: 'lan-required' })
   const [copied, setCopied] = useState(false)
@@ -49,6 +52,7 @@ export function RemoteEntry({ wide, useWorkspaces, t }: RemoteEntryProps) {
   const [relayTokenCopied, setRelayTokenCopied] = useState(false)
   const [relayTokenError, setRelayTokenError] = useState<string | undefined>(undefined)
   const eventSource = useRef<EventSource | undefined>(undefined)
+  const relaySettings = useRemoteSettingsCard(snapshot => snapshot)
 
   // The current workspace (the recent-workspace projection the shell's New
   // Session flow targets) — the deep-link target for the phone.
@@ -199,6 +203,19 @@ export function RemoteEntry({ wide, useWorkspaces, t }: RemoteEntryProps) {
     })
   }, [relayToken])
 
+  const handleEditRelayUrl = useCallback((value: string) => {
+    setRelayTokenError(undefined)
+    edit('relayUrl', value)
+  }, [edit])
+
+  const handleSaveRelaySettings = useCallback(() => {
+    setRelayTokenError(undefined)
+    void saveRelayUrl().then((saved) => {
+      if (!saved) return
+      void relayTokenStatus().then(setRelayToken, () => { setRelayTokenError(t('relayToken.error')) })
+    })
+  }, [saveRelayUrl, t])
+
   return (
     <>
       <div className={css.entryRow} data-rail={wide ? undefined : 'rail'}>
@@ -216,6 +233,7 @@ export function RemoteEntry({ wide, useWorkspaces, t }: RemoteEntryProps) {
             relayTokenBusy={relayTokenBusy}
             relayTokenCopied={relayTokenCopied}
             relayTokenError={relayTokenError}
+            relaySettings={relaySettings}
             onClose={closePanel}
             onStop={handleStop}
             onRefresh={handleRefresh}
@@ -223,6 +241,8 @@ export function RemoteEntry({ wide, useWorkspaces, t }: RemoteEntryProps) {
             onRotateRelayToken={handleRotateRelayToken}
             onRevokeRelayToken={handleRevokeRelayToken}
             onCopyRelayToken={handleCopyRelayToken}
+            onEditRelayUrl={handleEditRelayUrl}
+            onSaveRelaySettings={handleSaveRelaySettings}
             onPickAddress={handlePickAddress}
             onPickPublic={handlePickPublic}
           />

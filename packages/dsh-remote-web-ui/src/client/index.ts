@@ -102,6 +102,9 @@ export function apply(ctx: ClientContext): void {
   const t = ctx.locale.bind(NS)
   const binder = ctx.get('webUiSettings') ?? ctx.settingsScope
   const settingsScope = binder.bind<RemoteSettings>({ namespace: REMOTE_WEB_UI_NS })
+  // One staged controller backs both the compact panel field and the full
+  // plugin settings card, so there is only one draft and persistence path.
+  const remoteSettings = new RemoteSettingsCardController(settingsScope)
   const enabled = (): boolean => {
     const snapshot = settingsScope.getSnapshot()
     return snapshot.status === 'ready'
@@ -118,7 +121,11 @@ export function apply(ctx: ClientContext): void {
     let disposeEntry: (() => void) | undefined
     const syncEntry = (): void => {
       if (enabled() && disposeEntry === undefined) {
-        disposeEntry = ctx.slots.register({ name: 'sidebar.remote', locale: NS }, RemoteEntry)
+        disposeEntry = ctx.slots.register({
+          name: 'sidebar.remote',
+          locale: NS,
+          inject: () => remoteSettings.inject(),
+        }, RemoteEntry)
       } else if (!enabled() && disposeEntry !== undefined) {
         disposeEntry()
         disposeEntry = undefined
@@ -140,7 +147,12 @@ export function apply(ctx: ClientContext): void {
     let disposeEntry: (() => void) | undefined
     const syncEntry = (): void => {
       if (enabled() && disposeEntry === undefined) {
-        disposeEntry = ctx.slots.register({ name: 'sidebar.footer.action', id: 'remote-web-ui', locale: NS }, FooterRemoteEntry)
+        disposeEntry = ctx.slots.register({
+          name: 'sidebar.footer.action',
+          id: 'remote-web-ui',
+          locale: NS,
+          inject: () => remoteSettings.inject(),
+        }, FooterRemoteEntry)
       } else if (!enabled() && disposeEntry !== undefined) {
         disposeEntry()
         disposeEntry = undefined
@@ -156,7 +168,6 @@ export function apply(ctx: ClientContext): void {
 
   // Plugin configuration card: one staged form over the `remote-web-ui`
   // settings namespace, contributed to the Web UI plugin group.
-  const remoteSettings = new RemoteSettingsCardController(settingsScope)
   ctx.slots.inject('web-ui.plugin.item', () => ctx.slots.register({
     name: 'web-ui.plugin.item',
     id: 'remote-web-ui',

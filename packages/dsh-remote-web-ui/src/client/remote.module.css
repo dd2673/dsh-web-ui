@@ -339,6 +339,81 @@
 .tokenOnce { color: var(--dsw-alias-state-warn-primary); }
 .tokenError { color: var(--dsw-alias-state-error-primary); }
 
+.relaySettings {
+  display: grid;
+  gap: 6px;
+}
+
+.relayLabel {
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.relayInputRow {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+}
+
+.relayInput {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  outline: none;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--dsw-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.relayInput::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.relayInput:focus-visible {
+  border-color: var(--dsw-alias-brand-primary);
+  box-shadow: 0 0 0 2px var(--dsw-alias-brand-primary);
+}
+
+.relayInput[aria-invalid='true'] {
+  border-color: var(--dsw-alias-state-error-primary);
+}
+
+.relayInput:disabled {
+  opacity: 0.55;
+}
+
+.relaySave {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-button-elevated-fill);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.relaySave:hover:not(:disabled) {
+  background: var(--dsw-alias-button-floating-hover);
+}
+
+.relaySave:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-2), 0 0 0 4px var(--dsw-alias-brand-primary);
+}
+
+.relaySave:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .tokenValue {
   display: block;
   overflow-wrap: anywhere;

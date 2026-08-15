@@ -10,7 +10,7 @@
 
 ### 社区 relay 与 Android companion
 
-社区维护的 Android companion 与可选自托管 relay 是第三方集成，不是 DeepSeek 官方应用或托管服务。`relayEnabled` 模式为 companion 增加仅出站的 WebSocket 网关。设置 `relayUrl`、`relayHostId` 与 `relayHostTokenEnv` 中的环境变量名；插件不会新增本地端口，DSH 仍使用 loopback 端口 3080。relay 只保存有界元数据与令牌摘要，不保存会话、工具输出或仓库内容。
+社区维护的 Android companion 与可选自托管 relay 是第三方集成，不是 DeepSeek 官方应用或托管服务。非空 `relayUrl` 是仅出站 WebSocket 网关的用户侧开关，可直接在桌面远程控制面板填写并保存（公网服务必须使用 `wss://`，`ws://` 仅限 loopback 开发）；旧 profile 仍兼容 `relayEnabled`。`relayHostId` 与 `relayHostTokenEnv` 指向的凭据仍是仅限 host 的部署配置，不会在面板中填写。插件不会新增本地端口，DSH 仍使用 loopback 端口 3080。relay 只保存有界元数据与令牌摘要，不保存会话、工具输出或仓库内容。
 
 本地插件是 Android 凭据的权威。桌面面板可生成/轮换 256-bit 令牌或撤销访问。明文仅展示一次；本地磁盘与 relay 持久化只保存 SHA-256。轮换通过独立认证的 host 通道发送，会立即断开当前 Android 设备并使旧令牌失效。companion 通过 Android Keystore 存储明文且只请求一次。
 

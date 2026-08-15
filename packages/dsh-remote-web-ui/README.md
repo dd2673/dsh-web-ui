@@ -20,11 +20,15 @@ actions, and the update panel that probes and runs the update.
 
 The community-maintained Android companion and optional self-hosted relay are
 third-party integrations, not an official DeepSeek application or hosted
-service. The `relayEnabled` mode adds an outbound-only WebSocket gateway for
-the companion. Set `relayUrl`, `relayHostId`, and the environment-variable
-name in `relayHostTokenEnv`; the plugin never opens a new local port and DSH
-remains on loopback port 3080. The relay stores only bounded metadata and token
-digests, not conversations, tool output, or repository content.
+service. A non-empty `relayUrl` is the user-facing switch for the outbound-only
+WebSocket gateway and can be entered and saved directly in the desktop remote
+panel (`wss://` for Internet services; `ws://` only for loopback development).
+The legacy `relayEnabled` flag remains compatible with older profiles.
+`relayHostId` and the credential named by `relayHostTokenEnv` remain host-only
+deployment settings and are never entered in the panel. The plugin never opens
+a new local port and DSH remains on loopback port 3080. The relay stores only
+bounded metadata and token digests, not conversations, tool output, or
+repository content.
 
 The local plugin is the authority for the Android credential. Its desktop
 panel can generate/rotate a 256-bit token or revoke access. The clear value is
