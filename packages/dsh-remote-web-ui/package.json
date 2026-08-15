@@ -94,6 +94,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/zhu1090093659/dsh-web-ui.git"
+    "url": "https://github.com/dd2673/dsh-web-ui.git",
+    "directory": "packages/dsh-remote-web-ui"
+  },
+  "homepage": "https://github.com/dd2673/dsh-web-ui/tree/feat/android-remote-community/packages/dsh-remote-web-ui#readme",
+  "bugs": {
+    "url": "https://github.com/dd2673/dsh-web-ui/issues"
   }
 }

@@ -54,3 +54,5 @@ pnpm --filter @linxin666/dsh-relay-server start
 - A reverse proxy is required for remote access because the relay intentionally defaults to loopback-only listening.
 - The current configuration requires `DSH_RELAY_AGENT_TOKEN` even when no lifecycle agent is used, so reserve a distinct secret for it.
 - Compatible lifecycle agents use the documented polling protocol but are not included in this publication slice.
+
+Code maintenance and defect reports belong in the [maintainer-owned issue tracker](https://github.com/dd2673/dsh-web-ui/issues/1).

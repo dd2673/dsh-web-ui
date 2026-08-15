@@ -13,5 +13,14 @@
     "test": "node --experimental-websocket --test tests/*.test.mjs",
     "start": "node src/main.mjs"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dd2673/dsh-web-ui.git",
+    "directory": "packages/dsh-relay-server"
+  },
+  "homepage": "https://github.com/dd2673/dsh-web-ui/tree/feat/android-remote-community/packages/dsh-relay-server#readme",
+  "bugs": {
+    "url": "https://github.com/dd2673/dsh-web-ui/issues"
+  }
 }

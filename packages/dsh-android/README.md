@@ -77,3 +77,5 @@ $env:DSH_ANDROID_RELEASE_KEY_PASSWORD = '<key-password>'
 - Git and SSH controls are not part of the initial public release.
 - Lifecycle controls require an external compatible agent and are unavailable without one.
 - The Android client displays host-provided context pressure and breakdown data; it does not estimate context usage locally.
+
+Code maintenance and defect reports belong in the [maintainer-owned issue tracker](https://github.com/dd2673/dsh-web-ui/issues/1).

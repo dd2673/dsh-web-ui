@@ -35,14 +35,11 @@
 
 ## 安装
 
-推荐直接安装全家桶聚合包 `@linxin666/dsh-web-ui-all`（一个包装齐全部功能插件与皮肤），或单独安装本插件：
+公开 npm `0.1.15` 包早于本 Android companion 与 relay 发布切片。当前实现请使用维护分支，不要把 npm 包视为同一版本。
 
 ```sh
-### 从 npm 安装（推荐）
-dsh plugin --profile web add @linxin666/dsh-remote-web-ui
-
-### 从仓库安装（开发调试）
-git clone https://github.com/zhu1090093659/dsh-web-ui.git
+### 克隆社区维护分支
+git clone --branch feat/android-remote-community --single-branch https://github.com/dd2673/dsh-web-ui.git
 cd dsh-web-ui
 pnpm install && pnpm -r build
 dsh plugin --profile web add link:$(pwd)/packages/dsh-remote-web-ui
@@ -52,6 +49,8 @@ dsh plugin --profile web add link:$(pwd)/packages/dsh-remote-web-ui
 重启 profile（`dsh web`），然后打开侧边栏底部的手机图标。插件的 `cordis.patch.yml` 插入装载两个半区的单条插件行。
 
 > `github:<org>/<repo>` 安装适用于包位于仓库根部的独立仓库（`prepare` 脚本在安装时构建 `lib/`；pnpm ≥10 会阻断它，直到你把打印的 key 复制进 profile 的 `pnpm-workspace.yaml` `allowBuilds` 并重跑）。monorepo 子包使用上面的 `link:` 形式。
+
+Android companion 与 relay 的缺陷统一提交到[维护者自己的 Issue tracker](https://github.com/dd2673/dsh-web-ui/issues/1)。
 
 ## 使用
 

@@ -54,3 +54,5 @@ pnpm --filter @linxin666/dsh-relay-server start
 - 因为 relay 有意默认仅监听 loopback，远程访问需要反向代理。
 - 当前配置即使未使用 lifecycle agent 也要求 `DSH_RELAY_AGENT_TOKEN`，因此应为它预留独立 secret。
 - 兼容 lifecycle agent 使用已记录的轮询协议，但不随本发布切片提供。
+
+代码维护和缺陷统一提交到[维护者自己的 Issue tracker](https://github.com/dd2673/dsh-web-ui/issues/1)。

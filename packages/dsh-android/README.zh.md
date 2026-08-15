@@ -77,3 +77,5 @@ $env:DSH_ANDROID_RELEASE_KEY_PASSWORD = '<key-password>'
 - Git 和 SSH 控制不属于首个公开版本。
 - lifecycle 控制依赖外部兼容 agent；没有该 agent 时不可用。
 - Android 客户端仅显示 Host 提供的上下文压力和明细数据，不在本地估算上下文占用。
+
+代码维护和缺陷统一提交到[维护者自己的 Issue tracker](https://github.com/dd2673/dsh-web-ui/issues/1)。

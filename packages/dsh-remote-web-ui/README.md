@@ -96,14 +96,11 @@ describe the `/m` Web UI.
 
 ## Install
 
-Install the family aggregate package `@linxin666/dsh-web-ui-all` (all plugins and skins in one) or this plugin alone:
+The public npm `0.1.15` package predates this Android companion and relay slice. Use the maintained source branch for this implementation; do not treat the npm package as equivalent yet.
 
 ```sh
-# Recommended: install directly from npm
-dsh plugin --profile web add @linxin666/dsh-remote-web-ui
-
-# Or from the repository (development loop)
-git clone https://github.com/zhu1090093659/dsh-web-ui.git
+# Clone the maintained community branch
+git clone --branch feat/android-remote-community --single-branch https://github.com/dd2673/dsh-web-ui.git
 cd dsh-web-ui
 pnpm install && pnpm -r build
 dsh plugin --profile web add link:$(pwd)/packages/dsh-remote-web-ui
@@ -119,6 +116,8 @@ mounts both halves.
 > pnpm ≥10 blocks that until you copy the printed key into the profile's
 > `pnpm-workspace.yaml` `allowBuilds` and re-run). Monorepo subpackages
 > use the `link:` form above.
+
+Report Android companion and relay defects in the [maintainer-owned issue tracker](https://github.com/dd2673/dsh-web-ui/issues/1).
 
 ## Use
 

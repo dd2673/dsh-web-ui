@@ -12,5 +12,14 @@
   "dependencies": {
     "jsqr": "1.4.0"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dd2673/dsh-web-ui.git",
+    "directory": "packages/dsh-android"
+  },
+  "homepage": "https://github.com/dd2673/dsh-web-ui/tree/feat/android-remote-community/packages/dsh-android#readme",
+  "bugs": {
+    "url": "https://github.com/dd2673/dsh-web-ui/issues"
+  }
 }
