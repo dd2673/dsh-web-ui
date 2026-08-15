@@ -22,6 +22,7 @@ import { makeMobileRoutes } from './mobile-routes.ts'
 import { makeMobileApiRoutes } from './mobile-api.ts'
 import { RelayGateway } from './relay-gateway.ts'
 import { makeRelayCredentialRoutes, RelayCredentialStore } from './relay-credential.ts'
+import { makeRelaySettingsRoutes } from './relay-settings-routes.ts'
 import { lanIPv4Addresses } from './lan.ts'
 import { TunnelManager, type TunnelInfo } from './tunnel.ts'
 import {
@@ -284,6 +285,29 @@ export function apply(ctx: Context, config?: Config): void {
       }
     },
   })
+  const relaySettingsRoutes = makeRelaySettingsRoutes({
+    fence: request => isTrustedApiRequest(request, []),
+    read: () => {
+      const settings = ctx.get('settings')
+      const registered = settings?.get(REMOTE_WEB_UI_SETTINGS_NAMESPACE) as Config | undefined
+      return {
+        relayUrl: registered?.relayUrl ?? resolve().relayUrl ?? '',
+        writable: settings?.writable === true && registered !== undefined,
+      }
+    },
+    write: async (relayUrl) => {
+      const settings = ctx.get('settings')
+      if (settings === undefined || !settings.writable || settings.get(REMOTE_WEB_UI_SETTINGS_NAMESPACE) === undefined) {
+        throw new Error('settings unavailable')
+      }
+      const operation = relayUrl === undefined
+        ? { op: 'unset' as const, path: ['relayUrl'] }
+        : { op: 'set' as const, path: ['relayUrl'], value: relayUrl }
+      await settings.mutate(REMOTE_WEB_UI_SETTINGS_NAMESPACE, [operation])
+      const registered = settings.get(REMOTE_WEB_UI_SETTINGS_NAMESPACE) as Config | undefined
+      return { relayUrl: registered?.relayUrl ?? '', writable: settings.writable }
+    },
+  })
   ctx.effect(() => () => {
     relayGateway?.stop()
     relayGateway = undefined
@@ -391,6 +415,7 @@ export function apply(ctx: Context, config?: Config): void {
       ? makeMobileApiRoutes({ service, apiProxy, mobileEnterToSend: () => resolve().mobileEnterToSend })
       : []),
     ...relayCredentialRoutes,
+    ...relaySettingsRoutes,
     ...updateRoutes,
   ]
   const gate = makeGateListener(service, () => resolve().requirePairingForLan, () => resolve().enabled)

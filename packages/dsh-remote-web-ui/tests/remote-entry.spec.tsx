@@ -96,6 +96,21 @@ function relaySettings(initial: RemoteSettings = {}) {
   }
 }
 
+/** Legacy shells can mount the plugin without exposing its settings namespace. */
+function unexposedRelaySettings() {
+  const settings = relaySettings()
+  return {
+    ...settings,
+    useRemoteSettingsCard: <T,>(selector: (state: ReturnType<typeof settings.face.hooks.remoteSettingsCard.getSnapshot>) => T): T =>
+      selector({
+        ...settings.face.hooks.remoteSettingsCard.getSnapshot(),
+        available: true,
+        exposed: false,
+        writable: false,
+      }),
+  }
+}
+
 /** Minimal EventSource stub: instances record messages for manual dispatch. */
 class FakeEventSource {
   static instances: FakeEventSource[] = []
@@ -114,8 +129,18 @@ class FakeEventSource {
 
 /** fetch stub answering the pair endpoints. */
 function mockFetch(issue: { ok: boolean; status?: number; code?: string; url?: string; token?: string; expiresAt?: number; lanAddresses?: string[] }) {
+  let directRelayUrl = 'wss://relay.example.com/relay'
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
+    if (url === '/api/remote-web-ui/relay-config') {
+      if (init?.method === 'POST') {
+        directRelayUrl = (JSON.parse(String(init.body)) as { relayUrl: string }).relayUrl
+      }
+      return new Response(JSON.stringify({
+        ok: true,
+        value: { relayUrl: directRelayUrl, writable: true },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
     const status = init?.method === 'POST' && url === '/api/pair/issue' && !issue.ok ? (issue.status ?? 409) : 200
     const body = url === '/api/pair/issue' && issue.ok
       ? { ok: true, url: issue.url, token: issue.token, expiresAt: issue.expiresAt, lanAddresses: issue.lanAddresses ?? ['192.168.1.5'] }
@@ -309,6 +334,25 @@ describe('RemoteEntry', () => {
 
     await waitFor(() => expect(settings.set).toHaveBeenCalledWith('relayUrl', 'wss://relay-2.example.com/relay'))
     expect(settings.set).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses the loopback Host fallback when a legacy shell does not expose SettingsScope', async () => {
+    const settings = unexposedRelaySettings()
+    const { fetch } = mount(undefined, settings)
+    fireEvent.click(screen.getByRole('button', { name: 'Mobile remote control' }))
+
+    const input = await screen.findByLabelText('Relay service URL')
+    expect((input as HTMLInputElement).value).toBe('wss://relay.example.com/relay')
+    fireEvent.change(input, { target: { value: 'wss://relay-legacy.example.com/relay' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/remote-web-ui/relay-config', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ relayUrl: 'wss://relay-legacy.example.com/relay' }),
+    }))
+    expect(settings.set).not.toHaveBeenCalled()
   })
 })
 

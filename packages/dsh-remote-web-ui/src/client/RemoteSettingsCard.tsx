@@ -11,24 +11,14 @@ import {
   CardForm, booleanField, numberField, textField,
   type CardActions, type CardShell, type FieldSpec, type FieldState as CardFieldState,
 } from './settings-form.ts'
+import { parseRelayUrl } from '../relay-url.ts'
 
 /** Match the Host relay transport fence before a value can be persisted. */
 function relayUrlField(field: string): FieldSpec {
   return {
     field,
     format: value => typeof value === 'string' ? value : '',
-    parse: (text) => {
-      const trimmed = text.trim()
-      if (trimmed === '') return { kind: 'clear' }
-      try {
-        const url = new URL(trimmed)
-        const loopback = url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '::1'
-        if (url.protocol !== 'wss:' && !(url.protocol === 'ws:' && loopback)) return undefined
-        return { kind: 'set', value: trimmed }
-      } catch {
-        return undefined
-      }
-    },
+    parse: parseRelayUrl,
   }
 }
 

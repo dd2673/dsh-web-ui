@@ -11,10 +11,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { PairingPhase } from '../pairing.ts'
+import { parseRelayUrl } from '../relay-url.ts'
 import { RemotePanel, type PanelState } from './RemotePanel.tsx'
 import type { RemoteSettingsCardFace } from './RemoteSettingsCard.tsx'
 import {
-  copyText, issuePair, relayTokenStatus, revokeRelayToken, rotateRelayToken, stopPair,
+  copyText, issuePair, relayConfigStatus, relayTokenStatus, revokeRelayToken, rotateRelayToken,
+  saveRelayConfig, stopPair,
   type IssueResponse, type PairStateFrame, type RelayTokenStatus, type TunnelStatusFrame,
 } from './pair-api.ts'
 import { PhoneIcon } from './PhoneIcon.tsx'
@@ -51,6 +53,14 @@ export function RemoteEntry({ wide, useWorkspaces, useRemoteSettingsCard, edit, 
   const [relayTokenBusy, setRelayTokenBusy] = useState(false)
   const [relayTokenCopied, setRelayTokenCopied] = useState(false)
   const [relayTokenError, setRelayTokenError] = useState<string | undefined>(undefined)
+  const [directRelay, setDirectRelay] = useState({
+    loaded: false,
+    writable: false,
+    persisted: '',
+    draft: '',
+    saving: false,
+    failed: false,
+  })
   const eventSource = useRef<EventSource | undefined>(undefined)
   const relaySettings = useRemoteSettingsCard(snapshot => snapshot)
 
@@ -101,6 +111,21 @@ export function RemoteEntry({ wide, useWorkspaces, useRemoteSettingsCard, edit, 
 
   const openPanel = useCallback(async (): Promise<void> => {
     setOpen(true)
+    if (!relaySettings.exposed) {
+      void relayConfigStatus().then(
+        value => {
+          setDirectRelay({
+            loaded: true,
+            writable: value.writable,
+            persisted: value.relayUrl,
+            draft: value.relayUrl,
+            saving: false,
+            failed: false,
+          })
+        },
+        () => { setDirectRelay(previous => ({ ...previous, loaded: false, failed: true })) },
+      )
+    }
     const next = await mint()
     setState(next)
     void relayTokenStatus().then(setRelayToken, () => { setRelayTokenError(t('relayToken.error')) })
@@ -120,7 +145,7 @@ export function RemoteEntry({ wide, useWorkspaces, useRemoteSettingsCard, edit, 
         // Malformed frames are dropped; the snapshot on open is authoritative.
       }
     }
-  }, [mint, t])
+  }, [mint, relaySettings.exposed, t])
 
   const closePanel = useCallback(() => {
     closeEventSource()
@@ -205,16 +230,51 @@ export function RemoteEntry({ wide, useWorkspaces, useRemoteSettingsCard, edit, 
 
   const handleEditRelayUrl = useCallback((value: string) => {
     setRelayTokenError(undefined)
-    edit('relayUrl', value)
-  }, [edit])
+    if (relaySettings.exposed) edit('relayUrl', value)
+    else setDirectRelay(previous => ({ ...previous, draft: value, failed: false }))
+  }, [edit, relaySettings.exposed])
 
   const handleSaveRelaySettings = useCallback(() => {
     setRelayTokenError(undefined)
-    void saveRelayUrl().then((saved) => {
-      if (!saved) return
-      void relayTokenStatus().then(setRelayToken, () => { setRelayTokenError(t('relayToken.error')) })
-    })
-  }, [saveRelayUrl, t])
+    if (relaySettings.exposed) {
+      void saveRelayUrl().then((saved) => {
+        if (!saved) return
+        void relayTokenStatus().then(setRelayToken, () => { setRelayTokenError(t('relayToken.error')) })
+      })
+      return
+    }
+    if (parseRelayUrl(directRelay.draft) === undefined) return
+    setDirectRelay(previous => ({ ...previous, saving: true, failed: false }))
+    void saveRelayConfig(directRelay.draft).then(
+      value => {
+        setDirectRelay({
+          loaded: true,
+          writable: value.writable,
+          persisted: value.relayUrl,
+          draft: value.relayUrl,
+          saving: false,
+          failed: false,
+        })
+        void relayTokenStatus().then(setRelayToken, () => { setRelayTokenError(t('relayToken.error')) })
+      },
+      () => { setDirectRelay(previous => ({ ...previous, saving: false, failed: true })) },
+    )
+  }, [directRelay.draft, relaySettings.exposed, saveRelayUrl, t])
+
+  const directRelayParsed = parseRelayUrl(directRelay.draft)
+  const panelRelaySettings = relaySettings.exposed ? relaySettings : {
+    available: relaySettings.available,
+    exposed: directRelay.loaded,
+    writable: directRelay.writable,
+    relayUrl: {
+      text: directRelay.draft,
+      overridden: directRelay.persisted !== '',
+      invalid: directRelayParsed === undefined,
+    },
+    relayUrlDirty: directRelay.draft.trim() !== directRelay.persisted,
+    relayUrlSaving: directRelay.saving,
+    relayUrlFailed: directRelay.failed,
+  }
 
   return (
     <>
@@ -233,7 +293,7 @@ export function RemoteEntry({ wide, useWorkspaces, useRemoteSettingsCard, edit, 
             relayTokenBusy={relayTokenBusy}
             relayTokenCopied={relayTokenCopied}
             relayTokenError={relayTokenError}
-            relaySettings={relaySettings}
+            relaySettings={panelRelaySettings}
             onClose={closePanel}
             onStop={handleStop}
             onRefresh={handleRefresh}

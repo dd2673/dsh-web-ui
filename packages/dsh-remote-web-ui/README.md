@@ -23,6 +23,9 @@ third-party integrations, not an official DeepSeek application or hosted
 service. A non-empty `relayUrl` is the user-facing switch for the outbound-only
 WebSocket gateway and can be entered and saved directly in the desktop remote
 panel (`wss://` for Internet services; `ws://` only for loopback development).
+On older Harness shells that do not expose third-party SettingsScope to the
+browser, the same field falls back to a loopback-only plugin route that still
+persists through the Host SettingsProvider; it never edits YAML directly.
 The legacy `relayEnabled` flag remains compatible with older profiles.
 `relayHostId` and the credential named by `relayHostTokenEnv` remain host-only
 deployment settings and are never entered in the panel. The plugin never opens
