@@ -54,7 +54,9 @@ async function waitFor(expression, timeoutMs = 15_000) {
 
 async function tapButton(label) {
   const point = await evaluate(`(() => {
-    const node = [...document.querySelectorAll('.approval button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})
+    const node = [...document.querySelectorAll('.approval button')].find(button => (
+      button.textContent.trim() === ${JSON.stringify(label)} || button.getAttribute('aria-label') === ${JSON.stringify(label)}
+    ))
     node?.scrollIntoView({ block: 'center' })
     const rect = node?.getBoundingClientRect()
     return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null
@@ -270,25 +272,87 @@ try {
   })
 
   await inject('question-generic-rpc', {
-    type: 'question/requested', sessionId, questions: [{
-      id: 'generic', question: 'Choose an environment', options: [{ label: 'Staging' }, { label: 'Production' }],
-    }],
+    type: 'question/requested', sessionId, questions: [
+      {
+        id: 'environment', header: 'Deployment', question: 'Choose an environment',
+        options: [{ label: 'Staging' }, { label: 'Production' }],
+      },
+      {
+        id: 'checks', question: 'Select validation checks', multiSelect: true,
+        options: [
+          { label: 'Run focused tests', description: 'Run targeted unit and interaction checks before delivery.' },
+          { label: 'Build the Android APK', description: 'Create the signed Debug artifact for installation.' },
+        ],
+      },
+      { id: 'optional-note', question: 'Add an optional note' },
+      { id: 'handoff', question: 'Describe the remaining handoff work' },
+    ],
   })
-  await waitFor(`document.querySelector('#sessionApproval .approval-strip')?.textContent === '需要电脑处理'`)
+  await waitFor(`document.querySelector('#sessionApproval .approval-strip')?.textContent === '等待回答'`)
   assert.deepEqual(await evaluate(`(() => ({
-    notice: document.getElementById('sessionApproval').textContent.includes('请在电脑端继续'),
-    buttonCount: document.querySelectorAll('#sessionApproval button').length,
-  }))()`), { notice: true, buttonCount: 0 })
+    title: document.querySelector('#sessionApproval .generic-question-title')?.textContent,
+    progress: document.querySelector('#sessionApproval .generic-question-progress')?.textContent,
+    labels: [...document.querySelectorAll('#sessionApproval button')].map(button => button.textContent.trim()),
+    noOverflow: document.getElementById('sessionApproval').scrollWidth <= document.getElementById('sessionApproval').clientWidth + 1,
+  }))()`), {
+    title: 'Choose an environment', progress: '1 / 4', labels: ['放弃', '1Staging', '2Production', '上一题', '跳过本题', '下一题'], noOverflow: true,
+  })
+  await tapButton('Staging')
+  await waitFor(`document.querySelector('#sessionApproval .generic-question-title')?.textContent === 'Select validation checks'`)
+  await tapButton('Run focused tests')
+  await evaluate(`(() => {
+    const input = document.querySelector('#sessionApproval .generic-question-input')
+    input.value = 'Ask the reviewer to inspect the Android layout.'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })()`)
+  assert.deepEqual(await evaluate(`(() => ({
+    checked: document.querySelector('#sessionApproval [role="checkbox"][aria-checked="true"]')?.textContent.trim(),
+    custom: document.querySelector('#sessionApproval .generic-question-input')?.value,
+    noOverflow: document.getElementById('sessionApproval').scrollWidth <= document.getElementById('sessionApproval').clientWidth + 1,
+  }))()`), {
+    checked: 'xRun focused testsRun targeted unit and interaction checks before delivery.',
+    custom: 'Ask the reviewer to inspect the Android layout.', noOverflow: true,
+  })
+  if (process.env.DSH_E2E_SCREENSHOT) {
+    const screenshot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true })
+    await writeFile(process.env.DSH_E2E_SCREENSHOT, Buffer.from(screenshot.data, 'base64'))
+  }
+  await tapButton('下一题')
+  await waitFor(`document.querySelector('#sessionApproval .generic-question-title')?.textContent === 'Add an optional note'`)
+  await tapButton('跳过本题')
+  await waitFor(`document.querySelector('#sessionApproval .generic-question-title')?.textContent === 'Describe the remaining handoff work'`)
+  await evaluate(`(() => {
+    const input = document.querySelector('#sessionApproval .generic-question-textarea')
+    input.value = 'Install the Debug APK and verify the answer batch.'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })()`)
+  await tapButton('提交回答')
+  await waitFor(`window.__dshE2ERequests.length === 7`)
+  const genericAnswer = await requestAt(6)
+  assert.deepEqual(genericAnswer.payload.result.value, {
+    sessionId,
+    answer: {
+      answers: [
+        { id: 'environment', selected: ['Staging'] },
+        { id: 'checks', selected: ['Run focused tests'], custom: 'Ask the reviewer to inspect the Android layout.' },
+        { id: 'optional-note', selected: [] },
+        { id: 'handoff', selected: [], custom: 'Install the Debug APK and verify the answer batch.' },
+      ],
+    },
+  })
+  await answerRpc(genericAnswer.messageId, { ok: true, value: { accepted: true } })
+  assert.equal(await evaluate(`[...document.querySelectorAll('#sessionApproval button')].every(button => button.disabled)`), true)
   await inject('resolved-question-generic', {
     type: 'question/resolved', sessionId, questionRpcId: 'question-generic-rpc', outcome: 'answered',
   })
+  await waitFor(`document.getElementById('sessionApproval').classList.contains('hidden')`)
 
   console.log(JSON.stringify({
     ok: true,
     toolApproval: ['allowed-once', 'rejected'],
     planReview: ['Approve', 'Keep planning', 'cancelled'],
     authoritativeResolution: true,
-    genericQuestionDesktopNotice: true,
+    genericQuestionBatch: ['single-choice', 'multi-choice', 'custom', 'skip'],
   }))
 } finally {
   try {

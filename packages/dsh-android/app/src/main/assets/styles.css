@@ -267,6 +267,32 @@ form label { display: grid; gap: 7px; margin-top: 13px; color: var(--muted); fon
 .plan-review-body > :last-child { margin-bottom: 0; }
 .plan-review-actions { flex-wrap: wrap; }
 .approval-actions .action:disabled { opacity: .55; }
+.generic-question-header { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; }
+.generic-question-progress { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.generic-question-dismiss { min-height: 28px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); padding: 4px 6px; font-size: 10px; }
+.generic-question-dismiss:disabled { opacity: .55; }
+.generic-question-eyebrow { color: var(--muted) !important; font-size: 10px !important; }
+.approval .generic-question-title { margin-top: 5px; }
+.generic-question-body { max-height: min(42vh, 360px); overflow: auto; margin-top: 8px; overscroll-behavior: contain; }
+.generic-question-detail { margin: 0 0 8px; color: var(--text); font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.generic-question-detail > :first-child { margin-top: 0; }
+.generic-question-detail > :last-child { margin-bottom: 0; }
+.generic-question-options { display: grid; gap: 6px; }
+.generic-question-option, .generic-question-custom { display: flex; width: 100%; min-width: 0; align-items: flex-start; gap: 8px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-2); color: var(--text); padding: 8px; text-align: left; }
+.generic-question-option.selected, .generic-question-option:focus-visible, .generic-question-custom.active, .generic-question-custom:focus-within { border-color: var(--blue); background: var(--blue-soft); outline: none; }
+.generic-question-option:disabled { opacity: .55; }
+.generic-question-number, .generic-question-checkbox { display: grid; width: 20px; height: 20px; flex: 0 0 20px; place-items: center; border-radius: 6px; background: var(--surface); color: var(--muted); font-size: 10px; font-weight: 700; line-height: 1; }
+.generic-question-checkbox { border: 1px solid var(--line); border-radius: 5px; }
+.generic-question-option.selected .generic-question-checkbox, .generic-question-custom.active .generic-question-checkbox { border-color: var(--blue); background: var(--blue); color: #fff; }
+.generic-question-option-copy { display: grid; min-width: 0; gap: 2px; }
+.generic-question-option-label { overflow-wrap: anywhere; font-size: 12px; font-weight: 600; line-height: 1.45; }
+.generic-question-option-description { color: var(--muted); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
+.generic-question-input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); padding: 2px 0; font: inherit; font-size: 12px; line-height: 1.45; }
+.generic-question-input::placeholder, .generic-question-textarea::placeholder { color: var(--muted); }
+.generic-question-textarea { display: block; width: 100%; min-height: 76px; resize: vertical; border: 1px solid var(--line); border-radius: 11px; outline: 0; background: var(--surface-2); color: var(--text); padding: 9px; font: inherit; font-size: 12px; line-height: 1.45; }
+.generic-question-textarea:focus { border-color: var(--blue); }
+.generic-question-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); justify-content: stretch; }
+.generic-question-actions .action { min-width: 0; padding: 8px 5px; font-size: 10px; line-height: 1.25; overflow-wrap: anywhere; }
 .composer.awaiting-approval > :not(#sessionApproval):not(input[hidden]) { display: none; }
 .composer.awaiting-approval #sessionApproval { position: static; margin: 0; }
 

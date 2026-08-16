@@ -1599,7 +1599,10 @@
     } else if (frame.type === 'approval/resolved' && state.pendingApproval?.approvalId === frame.approvalId) {
       state.pendingApproval = null; renderApproval()
     } else if (frame.type === 'question/requested') {
-      state.pendingQuestion = { rpcId: envelope.rpcId, ...frame, busy: false, error: '' }
+      state.pendingQuestion = {
+        rpcId: envelope.rpcId, ...frame, busy: false, error: '',
+        questionIndex: 0, questionDrafts: createQuestionDrafts(frame.questions),
+      }
       renderApproval()
     } else if (frame.type === 'question/resolved' && state.pendingQuestion?.rpcId === frame.questionRpcId) {
       state.pendingQuestion = null; renderApproval()
@@ -1679,13 +1682,42 @@
     return { id: question.id, question: question.question, plan: question.detail, approve, decline }
   }
 
+  function createQuestionDrafts(questions) {
+    return Array.isArray(questions)
+      ? questions.map(() => ({ selected: [], custom: '', skipped: false }))
+      : []
+  }
+
+  function genericQuestionOf(question) {
+    const questions = question.questions
+    if (!Array.isArray(questions) || questions.length === 0) return null
+    const valid = questions.every(item => (
+      item && typeof item.id === 'string' && typeof item.question === 'string'
+      && (item.options === undefined || (
+        Array.isArray(item.options) && item.options.every(option => option && typeof option.label === 'string')
+      ))
+    ))
+    if (!valid) return null
+    if (!Array.isArray(question.questionDrafts) || question.questionDrafts.length !== questions.length) {
+      question.questionDrafts = createQuestionDrafts(questions)
+      question.questionIndex = 0
+    }
+    question.questionIndex = Math.max(0, Math.min(question.questionIndex || 0, questions.length - 1))
+    return { questions, index: question.questionIndex, draft: question.questionDrafts[question.questionIndex] }
+  }
+
+  function hasQuestionAnswer(draft) {
+    return draft.selected.length > 0 || draft.custom.trim() !== ''
+  }
+
+  function completedQuestionDraft(draft) {
+    return hasQuestionAnswer(draft) || draft.skipped === true
+  }
+
   function renderQuestionBox(box, question) {
     const review = planReviewOf(question.questions)
     if (!review) {
-      const strip = document.createElement('div'); strip.className = 'approval-strip'; strip.textContent = '需要电脑处理'
-      const title = document.createElement('strong'); title.textContent = question.questions?.[0]?.question || 'DeepSeek 正在等待回答'
-      const notice = document.createElement('p'); notice.textContent = '此问题暂不支持在 Android 端回答，请在电脑端继续。'
-      box.append(strip, title, notice)
+      renderGenericQuestionBox(box, question)
       return
     }
     box.setAttribute('aria-label', review.question)
@@ -1715,6 +1747,207 @@
     box.append(strip, body, interactionError(question.error), actions)
   }
 
+  function renderGenericQuestionBox(box, pending) {
+    const flow = genericQuestionOf(pending)
+    if (!flow) {
+      const strip = document.createElement('div'); strip.className = 'approval-strip'; strip.textContent = '问题格式无效'
+      const title = document.createElement('strong'); title.textContent = 'DeepSeek 正在等待回答'
+      const notice = document.createElement('p'); notice.textContent = '此问题缺少可安全回传的内容，可以放弃本次请求后在桌面端重新发起。'
+      const actions = document.createElement('div'); actions.className = 'approval-actions'
+      const dismiss = document.createElement('button'); dismiss.className = 'action danger'; dismiss.textContent = '放弃请求'
+      dismiss.disabled = pending.busy === true
+      dismiss.onclick = () => void cancelQuestion()
+      actions.appendChild(dismiss)
+      box.append(strip, title, notice, interactionError(pending.error), actions)
+      return
+    }
+
+    const item = flow.questions[flow.index]
+    const draft = flow.draft
+    const hasOptions = Array.isArray(item.options) && item.options.length > 0
+    box.setAttribute('aria-label', item.question)
+
+    const header = document.createElement('div'); header.className = 'generic-question-header'
+    const strip = document.createElement('div'); strip.className = 'approval-strip'; strip.textContent = '等待回答'
+    const progress = document.createElement('span'); progress.className = 'generic-question-progress'; progress.textContent = `${flow.index + 1} / ${flow.questions.length}`
+    const dismiss = document.createElement('button'); dismiss.className = 'generic-question-dismiss'; dismiss.textContent = '放弃'
+    dismiss.disabled = pending.busy === true
+    dismiss.onclick = () => void cancelQuestion()
+    header.append(strip, progress, dismiss)
+    if (item.header) {
+      const eyebrow = document.createElement('p'); eyebrow.className = 'generic-question-eyebrow'; eyebrow.textContent = item.header
+      box.append(header, eyebrow)
+    } else box.appendChild(header)
+
+    const title = document.createElement('strong'); title.className = 'generic-question-title'; title.textContent = item.question
+    const body = document.createElement('div'); body.className = 'generic-question-body'
+    if (item.detail !== undefined) {
+      const detail = document.createElement('div'); detail.className = 'generic-question-detail'
+      if (window.DshMarkdown) {
+        detail.innerHTML = window.DshMarkdown.renderMarkdown(String(item.detail))
+        decorateCodeBlocks(detail)
+      } else detail.textContent = String(item.detail)
+      body.appendChild(detail)
+    }
+    const options = document.createElement('div'); options.className = 'generic-question-options'
+    options.setAttribute('role', item.multiSelect === true ? 'group' : 'radiogroup')
+    for (const option of item.options || []) {
+      const selected = draft.selected.includes(option.label)
+      const choice = document.createElement('button'); choice.className = `generic-question-option${selected ? ' selected' : ''}`
+      choice.type = 'button'; choice.disabled = pending.busy === true
+      choice.setAttribute('role', item.multiSelect === true ? 'checkbox' : 'radio')
+      choice.setAttribute('aria-checked', String(selected))
+      choice.setAttribute('aria-label', option.label)
+      choice.onclick = () => chooseQuestionOption(option.label)
+      const marker = document.createElement('span'); marker.className = item.multiSelect === true ? 'generic-question-checkbox' : 'generic-question-number'
+      marker.textContent = item.multiSelect === true && selected ? 'x' : item.multiSelect === true ? '' : String(options.children.length + 1)
+      const copy = document.createElement('span'); copy.className = 'generic-question-option-copy'
+      const label = document.createElement('span'); label.className = 'generic-question-option-label'; label.textContent = option.label
+      copy.appendChild(label)
+      if (option.description) {
+        const description = document.createElement('small'); description.className = 'generic-question-option-description'; description.textContent = option.description
+        copy.appendChild(description)
+      }
+      choice.append(marker, copy); options.appendChild(choice)
+    }
+    if (hasOptions) {
+      const custom = document.createElement('label'); custom.className = `generic-question-custom${draft.custom ? ' active' : ''}`
+      const marker = document.createElement('span'); marker.className = item.multiSelect === true ? 'generic-question-checkbox' : 'generic-question-number'
+      marker.textContent = item.multiSelect === true && draft.custom ? 'x' : item.multiSelect === true ? '' : 'A'
+      const input = document.createElement('input'); input.type = 'text'; input.className = 'generic-question-input'; input.value = draft.custom
+      input.placeholder = '输入你的答案'; input.autocomplete = 'off'; input.disabled = pending.busy === true
+      input.oninput = event => setQuestionCustom(event.currentTarget.value, custom)
+      input.onkeydown = event => {
+        if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); advanceGenericQuestion() }
+      }
+      custom.append(marker, input); options.appendChild(custom)
+    } else {
+      const input = document.createElement('textarea'); input.className = 'generic-question-textarea'; input.value = draft.custom
+      input.rows = 3; input.placeholder = '输入你的答案'; input.disabled = pending.busy === true
+      input.oninput = event => setQuestionCustom(event.currentTarget.value)
+      input.onkeydown = event => {
+        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); advanceGenericQuestion() }
+      }
+      options.appendChild(input)
+    }
+    body.appendChild(options)
+
+    const actions = document.createElement('div'); actions.className = 'approval-actions generic-question-actions'
+    const previous = document.createElement('button'); previous.className = 'action'; previous.textContent = '上一题'
+    previous.disabled = pending.busy === true || flow.index === 0
+    previous.onclick = () => setGenericQuestionIndex(flow.index - 1)
+    const skip = document.createElement('button'); skip.className = 'action'; skip.textContent = '跳过本题'
+    skip.disabled = pending.busy === true
+    skip.onclick = () => void skipGenericQuestion()
+    const next = document.createElement('button'); next.className = 'action primary'; next.textContent = flow.index === flow.questions.length - 1 ? '提交回答' : '下一题'
+    next.disabled = pending.busy === true
+    next.onclick = () => void advanceGenericQuestion()
+    actions.append(previous, skip, next)
+    const error = interactionError(pending.error); error.classList.add('generic-question-error')
+    box.append(title, body, error, actions)
+  }
+
+  function setGenericQuestionIndex(index) {
+    const pending = state.pendingQuestion
+    const flow = pending && genericQuestionOf(pending)
+    if (!pending || !flow || pending.busy) return
+    pending.questionIndex = Math.max(0, Math.min(index, flow.questions.length - 1))
+    pending.error = ''
+    renderApproval()
+  }
+
+  function chooseQuestionOption(label) {
+    const pending = state.pendingQuestion
+    const flow = pending && genericQuestionOf(pending)
+    if (!pending || !flow || pending.busy) return
+    const item = flow.questions[flow.index]
+    const draft = flow.draft
+    if (item.multiSelect === true) {
+      draft.selected = draft.selected.includes(label)
+        ? draft.selected.filter(value => value !== label)
+        : [...draft.selected, label]
+    } else {
+      draft.selected = [label]
+      draft.custom = ''
+    }
+    draft.skipped = false
+    pending.error = ''
+    if (item.multiSelect !== true && flow.index < flow.questions.length - 1) pending.questionIndex = flow.index + 1
+    renderApproval()
+  }
+
+  function setQuestionCustom(value, customRow) {
+    const pending = state.pendingQuestion
+    const flow = pending && genericQuestionOf(pending)
+    if (!pending || !flow || pending.busy) return
+    const item = flow.questions[flow.index]
+    flow.draft.custom = value
+    if (item.multiSelect !== true) flow.draft.selected = []
+    flow.draft.skipped = false
+    pending.error = ''
+    if (customRow) {
+      customRow.classList.toggle('active', value !== '')
+      const marker = customRow.querySelector('.generic-question-checkbox')
+      if (marker) marker.textContent = value !== '' ? 'x' : ''
+    }
+    const error = document.querySelector('.generic-question-error')
+    if (error) error.textContent = ''
+  }
+
+  async function advanceGenericQuestion() {
+    const pending = state.pendingQuestion
+    const flow = pending && genericQuestionOf(pending)
+    if (!pending || !flow || pending.busy) return
+    if (!hasQuestionAnswer(flow.draft)) {
+      pending.error = '请选择一个选项或输入你的答案。'
+      renderApproval()
+      return
+    }
+    if (flow.index < flow.questions.length - 1) {
+      setGenericQuestionIndex(flow.index + 1)
+      return
+    }
+    await submitGenericQuestionAnswer(pending)
+  }
+
+  async function skipGenericQuestion() {
+    const pending = state.pendingQuestion
+    const flow = pending && genericQuestionOf(pending)
+    if (!pending || !flow || pending.busy) return
+    flow.draft.selected = []
+    flow.draft.custom = ''
+    flow.draft.skipped = true
+    pending.error = ''
+    if (flow.index < flow.questions.length - 1) {
+      setGenericQuestionIndex(flow.index + 1)
+      return
+    }
+    await submitGenericQuestionAnswer(pending)
+  }
+
+  async function submitGenericQuestionAnswer(pending) {
+    const flow = genericQuestionOf(pending)
+    if (!flow) return
+    const missing = pending.questionDrafts.findIndex(draft => !completedQuestionDraft(draft))
+    if (missing >= 0) {
+      pending.questionIndex = missing
+      pending.error = '请先完成或跳过每一道问题。'
+      renderApproval()
+      return
+    }
+    const answers = flow.questions.map((item, index) => {
+      const draft = pending.questionDrafts[index]
+      if (draft.skipped) return { id: item.id, selected: [] }
+      const custom = draft.custom.trim()
+      return {
+        id: item.id,
+        selected: custom === '' || item.multiSelect === true ? draft.selected : [],
+        ...(custom === '' ? {} : { custom }),
+      }
+    })
+    await answerQuestionAnswers(answers)
+  }
+
   function interactionError(message) {
     const error = document.createElement('p'); error.className = 'approval-error'; error.setAttribute('role', 'status')
     error.textContent = message || ''
@@ -1739,6 +1972,10 @@
   }
 
   async function answerQuestion(questionId, label) {
+    await answerQuestionAnswers([{ id: questionId, selected: [label] }])
+  }
+
+  async function answerQuestionAnswers(answers) {
     const question = state.pendingQuestion
     if (!question || question.busy) return
     question.busy = true
@@ -1746,12 +1983,12 @@
     renderApproval()
     try {
       await rpc('events.respond', {
-        result: { ok: true, value: { sessionId: question.sessionId, answer: { answers: [{ id: questionId, selected: [label] }] } } },
+        result: { ok: true, value: { sessionId: question.sessionId, answer: { answers } } },
       }, question.rpcId)
     } catch (error) {
       if (state.pendingQuestion === question) {
         question.busy = false
-        question.error = `计划操作失败：${error.message}`
+        question.error = `回答失败：${error.message}`
         renderApproval()
       }
     }
@@ -1770,7 +2007,7 @@
     } catch (error) {
       if (state.pendingQuestion === question) {
         question.busy = false
-        question.error = `计划操作失败：${error.message}`
+        question.error = `问题操作失败：${error.message}`
         renderApproval()
       }
     }
