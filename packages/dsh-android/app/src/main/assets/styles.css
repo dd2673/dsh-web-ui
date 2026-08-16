@@ -158,6 +158,16 @@ form label { display: grid; gap: 7px; margin-top: 13px; color: var(--muted); fon
 .message-body.collapsed { max-height: min(34vh, 300px); overflow: hidden; -webkit-mask-image: linear-gradient(#000 76%, transparent); mask-image: linear-gradient(#000 76%, transparent); }
 .message-state { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
 .message-toggle { width: fit-content; border: 0; background: transparent; color: #9ab9f9; padding: 5px 0 0; font-size: 10px; }
+.message-actions { display: flex; min-height: 28px; align-items: center; margin-top: 2px; }
+.message-copy { display: grid; width: 28px; height: 28px; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--muted); padding: 0; }
+.message-copy:active, .message-copy:focus-visible { background: var(--surface-2); color: var(--text); outline: none; }
+.message-copy svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.message-copy-check { display: none; }
+.message-copy[data-state="copied"] { color: var(--green); }
+.message-copy[data-state="copied"] .message-copy-icon { display: none; }
+.message-copy[data-state="copied"] .message-copy-check { display: block; }
+.message-copy[data-state="error"] { color: var(--red); }
+.message-copy-status { position: fixed; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .code-block { min-width: 0; margin: 8px 0; overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
 .code-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 9px; }
 .code-copy { border: 0; background: transparent; color: #9ab9f9; padding: 3px 5px; font-size: 9px; }
@@ -195,16 +205,18 @@ form label { display: grid; gap: 7px; margin-top: 13px; color: var(--muted); fon
 .context-meter-rows dt { color: var(--muted); }
 .context-meter-rows dd { margin: 0; color: var(--text); font-variant-numeric: tabular-nums; }
 .context-swatch { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 2px; background: var(--context-color); }
-.composer-context, .composer-toolbar, .composer-tools { display: flex; align-items: center; gap: 5px; }
-.composer-context, .composer-toolbar { overflow-x: auto; scrollbar-width: none; }
-.composer-toolbar { min-width: 0; }
-.composer-tools { flex: none; }
+.composer-context { display: flex; align-items: center; gap: 5px; overflow-x: auto; scrollbar-width: none; }
 .composer-chip, .tool-button { min-height: 24px; max-width: 145px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); color: var(--muted); padding: 3px 7px; font-size: 9px; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
 .composer-chip { max-width: 48%; color: var(--text); }
 .composer textarea { height: 1.4em; min-height: 1.4em; max-height: 7em; overflow-y: hidden; border: 0; background: transparent; padding: 0 4px; font-size: 13px; line-height: 1.4; }
-.composer-controls { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.15fr) 54px 54px; gap: 5px; min-width: 0; }
-.composer-controls .tool-button { width: 100%; min-width: 0; max-width: none; }
-.composer-controls .action { min-width: 0; min-height: 31px; padding: 5px 4px; }
+.composer-actions { display: flex; width: 100%; min-width: 0; align-items: center; gap: 4px; overflow: hidden; }
+.composer-actions .tool-button, .composer-actions .action { flex: none; height: 26px; min-height: 26px; min-width: 0; border-radius: 8px; padding: 3px 5px; font-size: 9px; line-height: 1; }
+.composer-actions .composer-icon-button { display: grid; width: 28px; max-width: 28px; place-items: center; padding: 0; }
+.composer-actions .composer-icon-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.composer-actions .composer-short-button { width: 36px; max-width: 36px; padding-inline: 3px; }
+.composer-actions .composer-permission-button { flex: 0 1 48px; min-width: 38px; max-width: 48px; }
+.composer-actions .composer-model-button { flex: 1 1 64px; min-width: 42px; max-width: none; }
+.composer-actions .composer-send-button { width: 32px; max-width: 32px; }
 .send-mode-control { border-color: #344e7d; color: #a8c0f4; }
 .attachment-list { display: flex; gap: 5px; overflow-x: auto; }
 .attachment-list[hidden] { display: none; }

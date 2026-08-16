@@ -23,10 +23,10 @@
   ],
   "debugCertificateSha256": "FD66EB2F40FE58A3366BECC7401D84A39EA831A5FB2282BA23859A8019A99DAA",
   "versionName": "0.1.15",
-  "versionCode": 16,
+  "versionCode": 18,
   "artifacts": {
-    "Debug": "dsh-remote-companion-0.1.15-r16-debug.apk",
-    "E2E": "dsh-remote-companion-0.1.15-r16-e2e.apk",
-    "Release": "dsh-remote-companion-0.1.15-r16-release.apk"
+    "Debug": "dsh-remote-companion-0.1.15-r18-debug.apk",
+    "E2E": "dsh-remote-companion-0.1.15-r18-e2e.apk",
+    "Release": "dsh-remote-companion-0.1.15-r18-release.apk"
   }
 }

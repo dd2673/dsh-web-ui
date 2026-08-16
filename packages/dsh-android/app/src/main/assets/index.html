@@ -137,19 +137,21 @@
       </div>
       <div id="attachmentList" class="attachment-list" hidden></div>
       <textarea id="promptInput" rows="1" placeholder="继续向 DeepSeek 发送消息"></textarea>
-      <div class="composer-toolbar" aria-label="会话工具栏">
-        <div class="composer-tools">
-          <button id="attachmentButton" class="tool-button" type="button">添加附件</button>
-          <button id="skillsButton" class="tool-button" type="button">Skills</button>
-          <button id="pluginsButton" class="tool-button" type="button" hidden>插件</button>
-          <button id="sendModeButton" class="tool-button send-mode-control" type="button">排队</button>
-        </div>
-      </div>
-      <div class="composer-controls" aria-label="发送控制">
-        <button id="permissionButton" class="tool-button" type="button">权限</button>
-        <button id="modelButton" class="tool-button" type="button">模型</button>
-        <button id="cancelSession" class="action danger">停止</button>
-        <button id="sendPrompt" class="action primary">发送</button>
+      <div class="composer-actions" aria-label="会话操作">
+        <button id="attachmentButton" class="tool-button composer-icon-button" type="button" aria-label="添加附件" title="添加附件">
+          <svg viewBox="0 0 18 18" aria-hidden="true"><path d="m6.2 9.8 4.9-4.9a2.4 2.4 0 0 1 3.4 3.4l-6.3 6.3a4 4 0 0 1-5.7-5.7l6-6"/></svg>
+        </button>
+        <button id="skillsButton" class="tool-button composer-short-button" type="button">技能</button>
+        <button id="pluginsButton" class="tool-button composer-short-button" type="button" hidden>插件</button>
+        <button id="sendModeButton" class="tool-button composer-short-button send-mode-control" type="button">排队</button>
+        <button id="permissionButton" class="tool-button composer-permission-button" type="button">权限</button>
+        <button id="modelButton" class="tool-button composer-model-button" type="button">模型</button>
+        <button id="cancelSession" class="action danger composer-icon-button" type="button" aria-label="停止当前轮次" title="停止当前轮次">
+          <svg viewBox="0 0 18 18" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1.5"/></svg>
+        </button>
+        <button id="sendPrompt" class="action primary composer-icon-button composer-send-button" type="button" aria-label="发送消息" title="发送消息">
+          <svg viewBox="0 0 18 18" aria-hidden="true"><path d="M3.5 9h11M10 4.5 14.5 9 10 13.5"/></svg>
+        </button>
       </div>
       <input id="attachmentInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
     </footer>

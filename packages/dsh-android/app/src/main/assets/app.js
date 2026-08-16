@@ -822,10 +822,10 @@
     if (row.kind === 'tool') return toolNode(row)
     if (row.kind === 'error') return errorNode(row)
     if (row.kind === 'context') return contextNode(row)
-    return messageNode(row.kind, row.text, row.pending === true)
+    return messageNode(row.kind, row.text, row.pending === true, row.kind === 'assistant')
   }
 
-  function messageNode(role, text, pending = false) {
+  function messageNode(role, text, pending = false, copyable = false) {
     const node = document.createElement('article'); node.className = `message ${role}${pending ? ' pending' : ''}`
     const body = document.createElement('div'); body.className = 'message-body'
     if (role === 'assistant' && window.DshMarkdown) {
@@ -847,7 +847,42 @@
       }
       node.appendChild(toggle)
     }
+    if (copyable && !pending && text.trim()) node.appendChild(messageCopyAction(text))
     return node
+  }
+
+  function messageCopyAction(text) {
+    const actions = document.createElement('div'); actions.className = 'message-actions'
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'message-copy'
+    button.setAttribute('aria-label', '复制模型回复')
+    button.title = '复制'
+    button.innerHTML = '<svg class="message-copy-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="3" width="9" height="11" rx="2"></rect><path d="M13 14v1a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h1"></path></svg><svg class="message-copy-check" viewBox="0 0 20 20" aria-hidden="true"><path d="m4.5 10.5 3.2 3.2 7.8-8"></path></svg>'
+    const status = document.createElement('span'); status.className = 'message-copy-status'; status.setAttribute('aria-live', 'polite')
+    button.onclick = async () => {
+      button.disabled = true
+      try {
+        await copyText(text)
+        button.dataset.state = 'copied'
+        button.setAttribute('aria-label', '模型回复已复制')
+        button.title = '已复制'
+        status.textContent = '模型回复已复制'
+      } catch (_) {
+        button.dataset.state = 'error'
+        button.setAttribute('aria-label', '复制模型回复失败')
+        button.title = '复制失败'
+        status.textContent = '复制模型回复失败'
+      } finally {
+        button.disabled = false
+        setTimeout(() => {
+          delete button.dataset.state
+          button.setAttribute('aria-label', '复制模型回复')
+          button.title = '复制'
+          status.textContent = ''
+        }, 1200)
+      }
+    }
+    actions.append(button, status)
+    return actions
   }
 
   function decorateCodeBlocks(body) {
@@ -919,6 +954,23 @@
       || state.workspaces.find(workspace => workspace.path === state.currentSession?.cwd)
   }
 
+  function compactPermissionLabel(value) {
+    return {
+      'danger-full-access': '全权限',
+      'workspace-write': '可写',
+      'read-only': '只读',
+    }[value] || '权限'
+  }
+
+  function compactModelLabel(value) {
+    const normalized = String(value || '')
+      .replace(/^DeepSeek[-\s_]*/i, '')
+      .replace(/[-_]+/g, ' ')
+      .trim()
+    if (!normalized) return '模型'
+    return normalized.length > 12 ? `${normalized.slice(0, 11)}…` : normalized
+  }
+
   function updateComposerLabels() {
     const workspace = currentWorkspace()
     $('workspaceButton').textContent = workspace?.title || state.currentSession?.cwd || '工作目录'
@@ -926,19 +978,22 @@
     const preset = state.presets.find(item => item.id === currentPreset)
     $('presetButton').textContent = preset?.name || currentPreset || 'Agent 模式'
     const permission = state.permissions?.currentValue
-    $('permissionButton').textContent = permission ? `权限 · ${permission}` : '权限'
+    $('permissionButton').textContent = compactPermissionLabel(permission)
     $('permissionButton').title = permission || '权限'
+    $('permissionButton').setAttribute('aria-label', permission ? `权限：${permission}` : '选择权限')
     $('pluginsButton').hidden = !state.capabilities.has('git.workbench') && !state.capabilities.has('ssh.list')
     const current = state.models?.current
     if (current) {
       const group = state.models.groups?.find(item => item.id === current.provider)
       const model = group?.models?.find(item => item.id === current.model)
       const modelLabel = model?.name || current.model
-      $('modelButton').textContent = `模型 · ${modelLabel}`
+      $('modelButton').textContent = compactModelLabel(modelLabel)
       $('modelButton').title = modelLabel
+      $('modelButton').setAttribute('aria-label', `模型：${modelLabel}`)
     } else {
       $('modelButton').textContent = '模型'
       $('modelButton').title = '模型'
+      $('modelButton').setAttribute('aria-label', '选择模型')
     }
     updateComposerState()
   }

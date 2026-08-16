@@ -207,6 +207,22 @@ test('composer grows from one line to at most five and resets after programmatic
   assert.match(styles, /\.composer textarea\s*\{[^}]*height:\s*1\.4em;[^}]*min-height:\s*1\.4em;[^}]*max-height:\s*7em;/s)
 })
 
+test('composer actions stay in one compact row with short state labels and icon-only primary actions', () => {
+  assert.match(html, /<div class="composer-actions" aria-label="会话操作">[\s\S]*id="attachmentButton"[\s\S]*id="permissionButton"[\s\S]*id="modelButton"[\s\S]*id="cancelSession"[\s\S]*id="sendPrompt"[\s\S]*<\/div>/)
+  assert.doesNotMatch(html, /class="composer-toolbar"/)
+  assert.doesNotMatch(html, /class="composer-controls"/)
+  assert.match(html, /id="attachmentButton"[^>]*aria-label="添加附件"[^>]*>[\s\S]*?<svg/)
+  assert.match(html, /id="cancelSession"[^>]*aria-label="停止当前轮次"[^>]*>[\s\S]*?<svg/)
+  assert.match(html, /id="sendPrompt"[^>]*aria-label="发送消息"[^>]*>[\s\S]*?<svg/)
+  assert.match(app, /function compactPermissionLabel\(value\)/)
+  assert.match(app, /'danger-full-access': '全权限'/)
+  assert.match(app, /function compactModelLabel\(value\)/)
+  assert.match(app, /replace\(\/\^DeepSeek\[-\\s_\]\*\/i, ''\)/)
+  assert.match(styles, /\.composer-actions\s*\{[^}]*display:\s*flex;[^}]*overflow:\s*hidden;/s)
+  assert.match(styles, /\.composer-actions \.tool-button, \.composer-actions \.action\s*\{[^}]*height:\s*26px;[^}]*min-height:\s*26px;/s)
+  assert.match(styles, /\.composer-actions \.composer-model-button\s*\{[^}]*flex:\s*1 1 64px;[^}]*min-width:\s*42px;/s)
+})
+
 test('long Markdown is collapsible and fenced code blocks get copy controls', () => {
   assert.match(app, /function decorateCodeBlocks\(/)
   assert.match(app, /DshRemoteNative\?\.copyText/)

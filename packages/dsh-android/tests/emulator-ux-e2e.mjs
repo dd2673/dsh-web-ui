@@ -305,6 +305,31 @@ assert.deepEqual(sessionLayout, {
   composerInsideViewport: true,
 })
 
+const composerActionsLayout = await evaluate(`(() => {
+  const row = document.querySelector('.composer-actions')
+  const rowRect = row.getBoundingClientRect()
+  const buttons = [...row.querySelectorAll('button')].filter(button => button.getBoundingClientRect().width > 0)
+  const rects = buttons.map(button => button.getBoundingClientRect())
+  return {
+    oneRow: rects.every(rect => Math.abs(rect.top - rects[0].top) <= 1),
+    equalHeight: rects.every(rect => Math.abs(rect.height - 26) <= 1),
+    noOverflow: row.scrollWidth <= row.clientWidth + 1 && rects.at(-1).right <= rowRect.right + 1,
+    iconOnlyPrimaryActions: ['attachmentButton', 'cancelSession', 'sendPrompt'].every(id => {
+      const button = document.getElementById(id)
+      return button.textContent.trim() === '' && Boolean(button.querySelector('svg')) && Boolean(button.getAttribute('aria-label'))
+    }),
+    permissionLabel: document.getElementById('permissionButton').textContent.trim(),
+    modelLabel: document.getElementById('modelButton').textContent.trim(),
+  }
+})()`)
+assert.equal(composerActionsLayout.oneRow, true)
+assert.equal(composerActionsLayout.equalHeight, true)
+assert.equal(composerActionsLayout.noOverflow, true)
+assert.equal(composerActionsLayout.iconOnlyPrimaryActions, true)
+assert.ok(composerActionsLayout.permissionLabel.length <= 3)
+assert.ok(composerActionsLayout.modelLabel.length <= 12)
+assert.equal(/^DeepSeek/i.test(composerActionsLayout.modelLabel), false)
+
 const composerSizing = await evaluate(`(() => {
   const input = document.getElementById('promptInput')
   const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight)
@@ -360,6 +385,7 @@ console.log(JSON.stringify({
   drives: directoryState.driveCount,
   context: true,
   modelSheet: true,
+  composerActions: composerActionsLayout,
   viewport,
 }))
 } finally {
