@@ -30,6 +30,7 @@ const mobileEnterToSend = () => true
 /** An ApiProxy stub answering each method with the internal response shape. */
 const promptCalls: unknown[] = []
 const directoryCalls: unknown[] = []
+const respondCalls: unknown[] = []
 const apiProxy = {
   workspace: {
     list: async () => ({ rpcId: 'r', result: { ok: true, value: { items: [], archivedSessionIds: [] } } }),
@@ -64,7 +65,10 @@ const apiProxy = {
     list: async () => ({ rpcId: 'r', result: { ok: true, value: { presets: [], authorable: false, hasDocument: false } } }),
     select: async () => ({ rpcId: 'r', result: { ok: true, value: { agentPreset: 'default' } } }),
   },
-  respond: async () => ({ accepted: true }),
+  respond: async (response: unknown) => {
+    respondCalls.push(response)
+    return { accepted: true }
+  },
   events: { mux: () => (async function* () {})() },
 } as unknown as ApiProxy
 
@@ -236,6 +240,23 @@ describe('mobile api envelope', () => {
 
     req.destroy()
     await new Promise<void>(resolve => server.close(() => resolve()))
+  })
+
+  it('forwards a question response payload without rewriting its answer labels', async () => {
+    respondCalls.length = 0
+    const server = await serve(makeMobileApiRoutes({ service, apiProxy, mobileEnterToSend }))
+    const result = {
+      ok: true,
+      value: { sessionId: 'session-plan', answer: { answers: [{ id: 'plan-review', selected: ['Approve'] }] } },
+    }
+    try {
+      const { status, body } = await call(server.port, 'events.respond', { result })
+      expect(status).toBe(200)
+      expect(JSON.parse(body)).toMatchObject({ type: 'server-response', result: { ok: true } })
+      expect(respondCalls).toEqual([{ type: 'client-response', rpcId: 'probe-1', result }])
+    } finally {
+      await server.close()
+    }
   })
 
   it.each(['queue', 'steer'] as const)('forwards session.prompt mode %s unchanged', async (mode) => {

@@ -9,6 +9,8 @@ DSH Remote Companion 是 DeepSeek Harness 的社区维护第三方 Android 配�
 - 在本地 Android WebView 壳中打开远程 DeepSeek Harness 会话。
 - 保持队列紧凑：每条可见项目只占一行短文本和图标操作，展开的队列可滚动并显示完整列表。
 - composer 空白时保持一行，随输入最多扩展到五行，以保留更多对话上下文空间。
+- 已完成的模型回复下方提供紧凑复制图标，一键复制完整 Markdown 原文。
+- 在当前会话中处理一次性工具审批和 DSH 原生计划审查，保留 Host 提供的决策值，并在收到权威 resolved 事件后才移除操作卡片。
 - 从工作区或受限的主机目录选择器创建会话，并在已配对设备上记住工作区折叠和置顶状态。
 
 ## 安装
@@ -43,6 +45,7 @@ WebView UI 和固定版本的 `jsQR` 解码器均随 APK 打包，不加载远�
 ```powershell
 pnpm --filter @linxin666/dsh-android test
 pnpm --filter @linxin666/dsh-android e2e:emulator -- http://127.0.0.1:9223
+pnpm --filter @linxin666/dsh-android e2e:interactions -- http://127.0.0.1:9223
 ```
 
 模拟器流程仅用于本地验证，不构成 Release APK 验收。

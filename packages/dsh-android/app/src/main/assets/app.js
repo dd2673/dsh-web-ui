@@ -14,7 +14,7 @@
   const state = {
     config: {}, socket: null, connected: false, authenticated: false,
     capabilities: new Set(), pending: new Map(), workspaces: [], sessions: [],
-    currentSession: null, pendingApproval: null, reconnectTimer: null, reconnectAttempt: 0,
+    currentSession: null, pendingApproval: null, pendingQuestion: null, reconnectTimer: null, reconnectAttempt: 0,
     historyEvents: [], models: null, presets: [], skills: [], permissions: null, attachments: [],
     promptMode: 'queue', sessionPageOpen: false, sessionHistorySeq: 0, archivedSessionIds: new Set(),
     pinnedSessionIds: new Set(), collapsedWorkspaceIds: new Set(), taskQuery: '', queuesBySession: new Map(), queueBusy: false,
@@ -377,6 +377,11 @@
 
   function requestEventsBaseline() {
     if (!state.socket || state.socket.readyState !== WebSocket.OPEN || !state.authenticated) return false
+    // A subscription restarts the Host mux. Drop transient mirrors first so
+    // only waits replayed by that authoritative generation remain actionable.
+    state.pendingApproval = null
+    state.pendingQuestion = null
+    renderApproval()
     state.socket.send(JSON.stringify({
       v: 1,
       type: 'stream.subscribe',
@@ -1589,10 +1594,15 @@
         if (state.sessionPageOpen) void refreshOpenSessionHistory(frame.sessionId, false)
       }
     } else if (frame.type === 'approval/requested') {
-      state.pendingApproval = { rpcId: envelope.rpcId, ...frame }
+      state.pendingApproval = { rpcId: envelope.rpcId, ...frame, busy: false, error: '' }
       renderApproval()
     } else if (frame.type === 'approval/resolved' && state.pendingApproval?.approvalId === frame.approvalId) {
       state.pendingApproval = null; renderApproval()
+    } else if (frame.type === 'question/requested') {
+      state.pendingQuestion = { rpcId: envelope.rpcId, ...frame, busy: false, error: '' }
+      renderApproval()
+    } else if (frame.type === 'question/resolved' && state.pendingQuestion?.rpcId === frame.questionRpcId) {
+      state.pendingQuestion = null; renderApproval()
     } else if (frame.type === 'session/event') {
       if (state.currentSession?.sessionId === frame.sessionId && frame.event) {
         if (frame.event.type === 'turn/start') setSessionRunning(true)
@@ -1622,35 +1632,148 @@
   }
 
   function renderApproval() {
-    const approval = state.pendingApproval
-    const inOpenSession = approval && state.sessionPageOpen && approval.sessionId === state.currentSession?.sessionId
-    renderApprovalBox($('sessionApproval'), inOpenSession ? approval : null)
-    renderApprovalBox($('approvalBox'), approval && !inOpenSession ? approval : null)
+    const interaction = state.pendingQuestion || state.pendingApproval
+    const inOpenSession = interaction && state.sessionPageOpen && interaction.sessionId === state.currentSession?.sessionId
+    renderApprovalBox($('sessionApproval'), inOpenSession ? interaction : null)
+    renderApprovalBox($('approvalBox'), interaction && !inOpenSession ? interaction : null)
     $('sessionPage').querySelector('.composer')?.classList.toggle('awaiting-approval', Boolean(inOpenSession))
   }
 
-  function renderApprovalBox(box, approval) {
+  function renderApprovalBox(box, interaction) {
     box.replaceChildren()
-    if (!approval) { box.className = 'approval hidden'; return }
+    box.removeAttribute('aria-label')
+    if (!interaction) { box.className = 'approval hidden'; return }
     box.className = 'approval'
+    if (Array.isArray(interaction.questions)) {
+      renderQuestionBox(box, interaction)
+      return
+    }
+    renderToolApprovalBox(box, interaction)
+  }
+
+  function renderToolApprovalBox(box, approval) {
     const strip = document.createElement('div'); strip.className = 'approval-strip'; strip.textContent = '等待审批'
     const title = document.createElement('strong'); title.textContent = approval.reason || `工具 ${approval.toolName || '未知工具'} 请求越权执行`
     const tool = document.createElement('p'); tool.textContent = `工具：${approval.toolName || '未知工具'}`
     const actions = document.createElement('div'); actions.className = 'approval-actions'
     const reject = document.createElement('button'); reject.className = 'action danger'; reject.textContent = '拒绝'
-    const allow = document.createElement('button'); allow.className = 'action primary'; allow.textContent = '仅允许一次'
+    const allow = document.createElement('button'); allow.className = 'action primary'; allow.textContent = '允许一次'
+    reject.disabled = approval.busy === true
+    allow.disabled = approval.busy === true
     reject.onclick = () => void answerApproval('rejected')
     allow.onclick = () => void answerApproval('allowed-once')
-    actions.append(reject, allow); box.append(strip, title, tool, actions)
+    actions.append(reject, allow); box.append(strip, title, tool, interactionError(approval.error), actions)
+  }
+
+  function planReviewOf(questions) {
+    if (!Array.isArray(questions) || questions.length !== 1) return null
+    const question = questions[0]
+    const intent = question?.intent
+    if (intent?.kind !== 'plan-review' || question.detail === undefined) return null
+    if (question.multiSelect === true) return null
+    const options = Array.isArray(question.options) ? question.options : []
+    if (options.length > 2) return null
+    const approve = options.find(option => option?.label === intent.approve)
+    if (!approve) return null
+    const decline = options.find(option => option?.label !== intent.approve)
+    return { id: question.id, question: question.question, plan: question.detail, approve, decline }
+  }
+
+  function renderQuestionBox(box, question) {
+    const review = planReviewOf(question.questions)
+    if (!review) {
+      const strip = document.createElement('div'); strip.className = 'approval-strip'; strip.textContent = '需要电脑处理'
+      const title = document.createElement('strong'); title.textContent = question.questions?.[0]?.question || 'DeepSeek 正在等待回答'
+      const notice = document.createElement('p'); notice.textContent = '此问题暂不支持在 Android 端回答，请在电脑端继续。'
+      box.append(strip, title, notice)
+      return
+    }
+    box.setAttribute('aria-label', review.question)
+    const strip = document.createElement('div'); strip.className = 'approval-strip'; strip.textContent = '计划待审'
+    const body = document.createElement('div'); body.className = 'plan-review-body'
+    if (window.DshMarkdown) {
+      body.innerHTML = window.DshMarkdown.renderMarkdown(review.plan)
+      decorateCodeBlocks(body)
+    } else body.textContent = review.plan
+    const actions = document.createElement('div'); actions.className = 'approval-actions plan-review-actions'
+    const discuss = document.createElement('button'); discuss.className = 'action'; discuss.textContent = '去聊天里说'
+    discuss.disabled = question.busy === true
+    discuss.onclick = () => void cancelQuestion()
+    actions.appendChild(discuss)
+    if (review.decline) {
+      const reject = document.createElement('button'); reject.className = 'action danger'; reject.textContent = '拒绝'
+      reject.disabled = question.busy === true
+      if (review.decline.description) reject.title = review.decline.description
+      reject.onclick = () => void answerQuestion(review.id, review.decline.label)
+      actions.appendChild(reject)
+    }
+    const approve = document.createElement('button'); approve.className = 'action primary'; approve.textContent = '确认执行'
+    approve.disabled = question.busy === true
+    if (review.approve.description) approve.title = review.approve.description
+    approve.onclick = () => void answerQuestion(review.id, review.approve.label)
+    actions.appendChild(approve)
+    box.append(strip, body, interactionError(question.error), actions)
+  }
+
+  function interactionError(message) {
+    const error = document.createElement('p'); error.className = 'approval-error'; error.setAttribute('role', 'status')
+    error.textContent = message || ''
+    return error
   }
 
   async function answerApproval(outcome) {
     const approval = state.pendingApproval
-    if (!approval) return
+    if (!approval || approval.busy) return
+    approval.busy = true
+    approval.error = ''
+    renderApproval()
     try {
       await rpc('events.respond', { result: { ok: true, value: { sessionId: approval.sessionId, approvalId: approval.approvalId, outcome } } }, approval.rpcId)
-      state.pendingApproval = null; renderApproval()
-    } catch (error) { $('actionResult').textContent = error.message }
+    } catch (error) {
+      if (state.pendingApproval === approval) {
+        approval.busy = false
+        approval.error = `审批失败：${error.message}`
+        renderApproval()
+      }
+    }
+  }
+
+  async function answerQuestion(questionId, label) {
+    const question = state.pendingQuestion
+    if (!question || question.busy) return
+    question.busy = true
+    question.error = ''
+    renderApproval()
+    try {
+      await rpc('events.respond', {
+        result: { ok: true, value: { sessionId: question.sessionId, answer: { answers: [{ id: questionId, selected: [label] }] } } },
+      }, question.rpcId)
+    } catch (error) {
+      if (state.pendingQuestion === question) {
+        question.busy = false
+        question.error = `计划操作失败：${error.message}`
+        renderApproval()
+      }
+    }
+  }
+
+  async function cancelQuestion() {
+    const question = state.pendingQuestion
+    if (!question || question.busy) return
+    question.busy = true
+    question.error = ''
+    renderApproval()
+    try {
+      await rpc('events.respond', {
+        result: { ok: false, error: { code: 'cancelled', message: 'the user closed this question request', details: {} } },
+      }, question.rpcId)
+    } catch (error) {
+      if (state.pendingQuestion === question) {
+        question.busy = false
+        question.error = `计划操作失败：${error.message}`
+        renderApproval()
+      }
+    }
   }
 
   function fillWorkspaceSelect() {

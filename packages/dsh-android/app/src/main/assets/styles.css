@@ -260,6 +260,13 @@ form label { display: grid; gap: 7px; margin-top: 13px; color: var(--muted); fon
 .approval p { color: #d8c194; font-size: 11px; }
 .approval-strip { color: var(--amber); font-size: 10px; }
 .approval-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.approval-error:empty { display: none; }
+.approval .approval-error { color: var(--red); }
+.plan-review-body { max-height: min(42vh, 360px); overflow: auto; margin-top: 8px; color: var(--text); font-size: 11px; line-height: 1.55; overscroll-behavior: contain; }
+.plan-review-body > :first-child { margin-top: 0; }
+.plan-review-body > :last-child { margin-bottom: 0; }
+.plan-review-actions { flex-wrap: wrap; }
+.approval-actions .action:disabled { opacity: .55; }
 .composer.awaiting-approval > :not(#sessionApproval):not(input[hidden]) { display: none; }
 .composer.awaiting-approval #sessionApproval { position: static; margin: 0; }
 

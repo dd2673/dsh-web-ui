@@ -7,6 +7,7 @@
   "scripts": {
     "test": "node --test tests/mobile-shell.test.mjs",
     "e2e:emulator": "node tests/emulator-ux-e2e.mjs",
+    "e2e:interactions": "node tests/emulator-interactions-e2e.mjs",
     "e2e:queue": "node tests/emulator-queue-e2e.mjs"
   },
   "dependencies": {

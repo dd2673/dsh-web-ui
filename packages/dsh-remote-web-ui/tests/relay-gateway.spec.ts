@@ -139,6 +139,39 @@ describe('relay gateway', () => {
     gateway.stop()
   })
 
+  it('forwards native plan-review question frames without rewriting them', async () => {
+    const socket = new FakeSocket()
+    const apiProxy = proxy()
+    const frame = {
+      rpcId: 'question-rpc-1',
+      payload: {
+        type: 'question/requested',
+        sessionId: 'session-plan',
+        questions: [{
+          id: 'plan-review',
+          question: 'Approve this plan and leave plan mode?',
+          detail: '# Plan\n\nRun the focused tests.',
+          options: [{ label: 'Approve' }, { label: 'Keep planning' }],
+          intent: { kind: 'plan-review', approve: 'Approve' },
+        }],
+      },
+    }
+    apiProxy.events.mux = () => (async function* () { yield frame })()
+    const gateway = new RelayGateway({
+      apiProxy,
+      relayUrl: 'ws://127.0.0.1:3090/relay',
+      hostId: 'desktop',
+      token: 'host-token-long-enough-for-the-relay',
+      webSocketFactory: () => socket,
+    })
+    gateway.start()
+    socket.open()
+    socket.receive({ v: 1, type: 'hello.ack' })
+    await tick()
+    expect(socket.sent).toContainEqual({ v: 1, type: 'event', stream: 'events.mux', payload: frame })
+    gateway.stop()
+  })
+
   it('refuses a non-TLS internet relay URL', () => {
     expect(() => validateRelayUrl('ws://relay.example.com/relay')).toThrow(/wss/)
     expect(validateRelayUrl('wss://relay.example.com')).toBe('wss://relay.example.com/relay')

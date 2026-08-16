@@ -9,6 +9,8 @@ DSH Remote Companion is a community-maintained third-party Android companion for
 - Opens remote DeepSeek Harness sessions in a local Android WebView shell.
 - Keeps the queue compact: each visible item is one short line with icon actions, while the expanded queue is scrollable and reveals the full list.
 - Keeps the composer to one line when empty and grows with input up to five lines, preserving conversation context space.
+- Copies a completed model reply as full Markdown from one compact icon action below the message.
+- Handles one-time tool approvals and native DSH plan reviews in the active conversation, preserving host-provided decision values and waiting for authoritative resolution before dismissing the card.
 - Creates a session from a workspace or a bounded host directory picker, and remembers workspace collapse and pin state on the paired device.
 
 ## Install
@@ -47,6 +49,7 @@ Run the local Android unit tests before using emulator flows.
 ```powershell
 pnpm --filter @linxin666/dsh-android test
 pnpm --filter @linxin666/dsh-android e2e:emulator -- http://127.0.0.1:9223
+pnpm --filter @linxin666/dsh-android e2e:interactions -- http://127.0.0.1:9223
 ```
 
 The emulator flow is a local validation aid and does not establish Release APK acceptance.
