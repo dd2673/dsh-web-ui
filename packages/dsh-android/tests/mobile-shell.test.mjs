@@ -363,8 +363,9 @@ test('canonical Android entrypoint pins package, label, icon, version and debug 
   assert.doesNotMatch(buildScript, /-genkeypair/)
   assert.match(buildScript, /LastWriteTimeUtc = \$fixedZipTimestamp/)
   assert.match(buildScript, /--v1-signing-enabled false --v2-signing-enabled true --v3-signing-enabled true --v4-signing-enabled false/)
-  assert.match(buildEntrypoint, /Where-Object \{ \$_\.Name -match '\\\.\(\?:apk\|idsig\)\$' \}/)
-  assert.match(buildEntrypoint, /Remove-Item -LiteralPath \$intermediateRoot -Recurse -Force/)
+  assert.match(buildEntrypoint, /Clear-CanonicalDirectory \$distRoot/)
+  assert.match(buildEntrypoint, /canonical dist must contain exactly one APK/)
+  assert.match(buildEntrypoint, /Remove-CanonicalPath \$intermediateRoot/)
 })
 
 test('release QR validation accepts only its declared HTTPS relay host', () => {

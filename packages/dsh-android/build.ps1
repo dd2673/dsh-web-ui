@@ -17,6 +17,22 @@ $ErrorActionPreference = 'Stop'
 if ($env:DSH_ANDROID_CANONICAL_BUILD -ne 'build-android.ps1') {
   throw 'Use the repository root build-android.ps1 entrypoint; direct package builds are disabled'
 }
+
+function Remove-BuildPath([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) { return }
+  for ($attempt = 1; $attempt -le 5; $attempt++) {
+    try {
+      Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+      return
+    } catch {
+      if ($attempt -eq 5) {
+        throw "Unable to overwrite Android build path '$Path': $($_.Exception.Message)"
+      }
+      Start-Sleep -Milliseconds (200 * $attempt)
+    }
+  }
+}
+
 $packageRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sourceRoot = Join-Path $packageRoot 'app\src\main'
 $buildRoot = Join-Path $packageRoot 'build'
@@ -60,10 +76,10 @@ if ($BuildType -eq 'Release') {
   }
 }
 
-if (Test-Path -LiteralPath $buildRoot) { Remove-Item -LiteralPath $buildRoot -Recurse -Force }
+Remove-BuildPath $buildRoot
 $null = New-Item -ItemType Directory -Path $distRoot -Force
 $final = Join-Path $distRoot $ArtifactFileName
-if (Test-Path -LiteralPath $final) { Remove-Item -LiteralPath $final -Force }
+Remove-BuildPath $final
 $resOut = New-Item -ItemType Directory -Path (Join-Path $buildRoot 'res') -Force
 $genOut = New-Item -ItemType Directory -Path (Join-Path $buildRoot 'gen') -Force
 $classOut = New-Item -ItemType Directory -Path (Join-Path $buildRoot 'classes') -Force

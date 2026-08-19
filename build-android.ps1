@@ -30,6 +30,31 @@ function Get-NormalizedTextSha256([string]$Path) {
   }
 }
 
+function Remove-CanonicalPath([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) { return }
+  for ($attempt = 1; $attempt -le 5; $attempt++) {
+    try {
+      Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+      return
+    } catch {
+      if ($attempt -eq 5) {
+        throw "Unable to overwrite canonical Android output '$Path': $($_.Exception.Message)"
+      }
+      Start-Sleep -Milliseconds (200 * $attempt)
+    }
+  }
+}
+
+function Clear-CanonicalDirectory([string]$Directory) {
+  if (-not (Test-Path -LiteralPath $Directory)) {
+    $null = New-Item -ItemType Directory -Path $Directory -Force
+    return
+  }
+  foreach ($entry in @(Get-ChildItem -LiteralPath $Directory -Force)) {
+    Remove-CanonicalPath $entry.FullName
+  }
+}
+
 Assert-Identity ($profile.schemaVersion -eq 1) 'unsupported profile schema'
 Assert-Identity ($debugManifest -match ('package="' + [regex]::Escape($profile.packageName) + '"')) 'debug package name changed'
 Assert-Identity ($releaseManifest -match ('package="' + [regex]::Escape($profile.packageName) + '"')) 'release package name changed'
@@ -49,9 +74,7 @@ Assert-Identity ($artifactName -match '^[a-z0-9][a-z0-9.-]+\.apk$') 'invalid art
 $distRoot = [IO.Path]::GetFullPath((Join-Path $packageRoot 'dist'))
 $packageBoundary = [IO.Path]::GetFullPath($packageRoot).TrimEnd('\') + '\'
 Assert-Identity ($distRoot.StartsWith($packageBoundary, [StringComparison]::OrdinalIgnoreCase)) 'artifact cleanup escaped the Android package'
-if (Test-Path -LiteralPath $distRoot) {
-  Get-ChildItem -LiteralPath $distRoot -File | Where-Object { $_.Name -match '\.(?:apk|idsig)$' } | Remove-Item -Force
-}
+Clear-CanonicalDirectory $distRoot
 $buildType = if ($Variant -eq 'Release') { 'Release' } else { 'Debug' }
 $engineArgs = @{
   AndroidSdk = $AndroidSdk
@@ -98,9 +121,11 @@ $expectedCert = $expectedCert.Replace(':', '').ToUpperInvariant()
 Assert-Identity ($actualCert -eq $expectedCert) 'built APK signing certificate changed'
 
 $apkSha256 = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash
+$distEntries = @(Get-ChildItem -LiteralPath $distRoot -Force)
+Assert-Identity ($distEntries.Count -eq 1 -and $distEntries[0].Name -eq $artifactName) 'canonical dist must contain exactly one APK'
 $intermediateRoot = [IO.Path]::GetFullPath((Join-Path $packageRoot 'build'))
 Assert-Identity ($intermediateRoot.StartsWith($packageBoundary, [StringComparison]::OrdinalIgnoreCase)) 'intermediate cleanup escaped the Android package'
-if (Test-Path -LiteralPath $intermediateRoot) { Remove-Item -LiteralPath $intermediateRoot -Recurse -Force }
+Remove-CanonicalPath $intermediateRoot
 Write-Output "APK: $artifact"
 Write-Output "Package: $($profile.packageName)"
 Write-Output "Label: $($profile.applicationLabel)"
