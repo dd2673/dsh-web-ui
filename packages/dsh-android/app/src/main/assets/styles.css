@@ -134,7 +134,7 @@ form label { display: grid; gap: 7px; margin-top: 13px; color: var(--muted); fon
 .session-header h2 { overflow: hidden; color: var(--text); font-size: 16px; font-weight: 650; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
 .session-header p { display: -webkit-box; overflow: hidden; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; word-break: break-word; -webkit-box-orient: vertical; -webkit-line-clamp: 1; }
 .session-header .icon-button { flex: none; min-height: 28px; padding: 5px 7px; font-size: 10px; line-height: 1; white-space: nowrap; }
-.history { min-height: 0; overflow: auto; display: grid; align-content: start; gap: 9px; padding: 9px max(8px, env(safe-area-inset-right)) 12px max(8px, env(safe-area-inset-left)); overscroll-behavior: contain; }
+.history { min-height: 0; overflow: auto; display: flex; flex-direction: column; align-items: stretch; gap: 9px; padding: 9px max(8px, env(safe-area-inset-right)) 12px max(8px, env(safe-area-inset-left)); overscroll-behavior: contain; }
 .message { min-width: 0; color: var(--text); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .message.user { max-width: 84%; margin-left: auto; padding: 10px 13px; border-radius: 17px; background: var(--blue-soft); white-space: pre-wrap; }
 .message.assistant { padding: 2px 4px; }
@@ -176,8 +176,39 @@ form label { display: grid; gap: 7px; margin-top: 13px; color: var(--muted); fon
 .agent-row-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-row[data-state="running"] .agent-row-summary { color: #9ab9f9; }
 .tool-row[data-state="error"] .agent-row-summary { color: var(--danger); }
-.context-row { color: var(--muted); }
+.tool-tree { min-width: 0; }
+.tool-tree > .tool-row { cursor: pointer; list-style: none; }
+.tool-tree > .tool-row::-webkit-details-marker { display: none; }
+.tool-tree > .tool-row::before { content: '›'; flex: none; width: 12px; color: var(--muted); font-size: 17px; line-height: 1; transform: rotate(0deg); transition: transform .15s ease; }
+.tool-tree[open] > .tool-row::before { transform: rotate(90deg); }
+.tool-tree-body { margin: 1px 0 4px 20px; padding-left: 8px; border-left: 1px solid var(--line); }
+.tool-tree-body .tool-tree { margin: 1px 0; }
+.tool-detail { max-height: 180px; margin: 2px 0 5px; overflow: auto; color: var(--muted); font: 10px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.think-row .agent-row-title { color: #b7a7df; }
+.context-row { display: block; color: var(--muted); }
+.context-row > summary { display: flex; min-width: 0; align-items: center; gap: 8px; min-height: 32px; cursor: pointer; list-style: none; }
+.context-row > summary::-webkit-details-marker { display: none; }
+.context-row > summary::before { content: '›'; flex: none; width: 12px; color: var(--muted); font-size: 17px; line-height: 1; transform: rotate(0deg); transition: transform .15s ease; }
+.context-row[open] > summary::before { transform: rotate(90deg); }
 .context-row .agent-row-title { color: var(--muted); }
+.context-body { margin: 2px 0 5px 20px; padding: 8px 10px; border-left: 2px solid var(--line); border-radius: 0 8px 8px 0; background: rgba(255,255,255,.025); color: var(--muted); font-size: 10px; line-height: 1.45; }
+.context-details-list { display: grid; gap: 3px; max-height: 180px; margin: 0 0 7px; overflow-y: auto; padding-left: 18px; }
+.context-details-list li { overflow-wrap: anywhere; }
+.context-details-note { margin: 3px 0 0; color: var(--muted); }
+.lifecycle-row { align-items: baseline; }
+.compaction-row .agent-row-summary, .retry-row .agent-row-summary { color: #a8c0f4; }
+.run-summary-row { display: block; flex: none; min-height: 0; height: auto; padding: 0; color: var(--muted); }
+.run-summary-head { display: flex; width: 100%; min-width: 0; align-items: center; gap: 8px; min-height: 28px; cursor: pointer; border: 0; background: transparent; color: inherit; padding: 0 4px; text-align: left; }
+.run-summary-head::before { content: '›'; flex: none; width: 12px; color: var(--muted); font-size: 17px; line-height: 1; transform: rotate(0deg); transition: transform .15s ease; }
+.run-summary-row[data-open="true"] > .run-summary-head::before { transform: rotate(90deg); }
+.run-summary-head .agent-row-title { color: var(--muted); }
+.run-summary-body { display: block; min-width: 0; margin: 1px 0 5px 20px; padding: 4px 0 2px 8px; border-left: 2px solid var(--line); }
+.run-summary-body[hidden] { display: none; }
+.run-summary-body > .message { margin: 3px 0; padding-inline: 4px; }
+.run-summary-body > .agent-row, .run-summary-body > .context-row { margin: 1px 0; }
+.max-tokens-row { align-items: baseline; color: #e8ba70; }
+.max-tokens-row strong { flex: none; color: #f2cf8d; }
+.max-tokens-row span { color: var(--muted); }
 .error-row { align-items: baseline; color: var(--danger); }
 .error-row strong { flex: none; }
 .error-row span { color: var(--muted); }
@@ -186,12 +217,14 @@ form label { display: grid; gap: 7px; margin-top: 13px; color: var(--muted); fon
 .composer-status { overflow: hidden; min-height: 13px; color: var(--muted); font-size: 9px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .composer-status-row { position: relative; display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; }
 .composer-status-row .composer-status { flex: 1; min-width: 0; }
+.composer-stats { min-width: 0; overflow-x: auto; color: var(--muted); font-size: 9px; line-height: 1.35; scrollbar-width: none; white-space: nowrap; }
+.composer-stats::-webkit-scrollbar { display: none; }
 .context-meter { position: relative; display: inline-flex; flex: none; }
-.context-meter-button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+.context-meter-button { display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
 .context-ring-track, .context-ring-fill { fill: none; stroke-width: 2; }
 .context-ring-track { stroke: var(--line); }
 .context-ring-fill { stroke: var(--muted); stroke-linecap: round; stroke-dasharray: 0 100; transform: rotate(-90deg); transform-origin: center; }
-.context-meter-panel { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 80; width: min(264px, calc(100vw - 24px)); padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #37383c; color: var(--muted); box-shadow: 0 16px 44px rgba(0,0,0,.48); font-size: 11px; }
+.context-meter-panel { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 80; width: min(300px, calc(100vw - 24px)); max-height: min(55dvh, 420px); overflow-y: auto; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #37383c; color: var(--muted); box-shadow: 0 16px 44px rgba(0,0,0,.48); font-size: 11px; }
 .context-meter-head { display: flex; align-items: center; gap: 6px; }
 .context-meter-head strong, .context-meter-head b { color: var(--text); font-weight: 650; }
 .context-meter-head b { margin-left: auto; font-variant-numeric: tabular-nums; }
@@ -209,14 +242,19 @@ form label { display: grid; gap: 7px; margin-top: 13px; color: var(--muted); fon
 .composer-chip, .tool-button { min-height: 24px; max-width: 145px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); color: var(--muted); padding: 3px 7px; font-size: 9px; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
 .composer-chip { max-width: 48%; color: var(--text); }
 .composer textarea { height: 1.4em; min-height: 1.4em; max-height: 7em; overflow-y: hidden; border: 0; background: transparent; padding: 0 4px; font-size: 13px; line-height: 1.4; }
-.composer-actions { display: flex; width: 100%; min-width: 0; align-items: center; gap: 4px; overflow: hidden; }
-.composer-actions .tool-button, .composer-actions .action { flex: none; height: 26px; min-height: 26px; min-width: 0; border-radius: 8px; padding: 3px 5px; font-size: 9px; line-height: 1; }
-.composer-actions .composer-icon-button { display: grid; width: 28px; max-width: 28px; place-items: center; padding: 0; }
-.composer-actions .composer-icon-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.composer-actions .composer-short-button { width: 36px; max-width: 36px; padding-inline: 3px; }
-.composer-actions .composer-permission-button { flex: 0 1 48px; min-width: 38px; max-width: 48px; }
-.composer-actions .composer-model-button { flex: 1 1 64px; min-width: 42px; max-width: none; }
-.composer-actions .composer-send-button { width: 32px; max-width: 32px; }
+.composer-actions { display: flex; width: 100%; min-width: 0; align-items: center; gap: 6px; overflow: hidden; }
+.composer-tools { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.composer-tools::-webkit-scrollbar { display: none; }
+.composer-tools .tool-button { flex: none; height: 36px; min-height: 36px; min-width: 0; border-radius: 10px; padding: 3px 7px; font-size: 10px; line-height: 1; }
+.composer-tools .composer-icon-button { display: grid; width: 36px; max-width: 36px; place-items: center; padding: 0; }
+.composer-tools .composer-icon-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.composer-tools .composer-short-button { width: 42px; max-width: 42px; padding-inline: 3px; }
+.composer-tools .composer-permission-button { flex: 0 0 52px; width: 52px; max-width: 52px; }
+.composer-tools .composer-model-button { flex: 0 0 64px; width: 64px; max-width: 64px; }
+.composer-primary-actions { display: flex; flex: none; align-items: center; gap: 6px; }
+.composer-primary-button { display: grid; flex: none; width: 48px; height: 48px; min-width: 48px; min-height: 48px; place-items: center; border-radius: 999px; padding: 0; }
+.composer-primary-button svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.composer-send-button { width: 48px; max-width: 48px; }
 .send-mode-control { border-color: #344e7d; color: #a8c0f4; }
 .attachment-list { display: flex; gap: 5px; overflow-x: auto; }
 .attachment-list[hidden] { display: none; }

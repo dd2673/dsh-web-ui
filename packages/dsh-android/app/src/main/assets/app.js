@@ -5,6 +5,7 @@
   const RPC_DIRECT_MAX_CHARS = 96_000
   const RPC_CHUNK_CHARS = 48_000
   const RPC_CHUNK_MAX_COUNT = 160
+  const TASK_ROSTER_REFRESH_MS = 5000
   const ATTACHMENT_MAX_BYTES = 1024 * 1024
   const ATTACHMENT_MAX_COUNT = 4
   let scanStream = null
@@ -15,11 +16,13 @@
     config: {}, socket: null, connected: false, authenticated: false,
     capabilities: new Set(), pending: new Map(), workspaces: [], sessions: [],
     currentSession: null, pendingApproval: null, pendingQuestion: null, reconnectTimer: null, reconnectAttempt: 0,
+    taskRosterRefreshTimer: null, taskRosterRefreshInFlight: false, taskRosterRefreshQueued: false,
     historyEvents: [], models: null, presets: [], skills: [], permissions: null, attachments: [],
     promptMode: 'queue', sessionPageOpen: false, sessionHistorySeq: 0, archivedSessionIds: new Set(),
     pinnedSessionIds: new Set(), collapsedWorkspaceIds: new Set(), taskQuery: '', queuesBySession: new Map(), queueBusy: false,
     queueExpanded: false, directoryListing: null, directoryBusy: false, directoryDrives: [], directorySearchTimer: null,
     directorySearchSeq: 0, directorySessionOptions: {}, contextPressure: null, contextBreakdown: null,
+    tokenUsage: null, sessionStats: null,
     contextMeterOpen: false, projectionSeqs: new Map(),
   }
 
@@ -212,6 +215,7 @@
 
   function connect() {
     if (state.reconnectTimer) clearTimeout(state.reconnectTimer)
+    stopTaskRosterRefresh()
     if (state.socket) state.socket.close(1000, 'reconfigure')
     state.socket = null
     state.authenticated = false
@@ -240,6 +244,7 @@
     }
     socket.onerror = () => setConnection('off', '网络连接失败')
     socket.onclose = event => {
+      stopTaskRosterRefresh()
       state.connected = false
       state.authenticated = false
       state.socket = null
@@ -257,6 +262,29 @@
     setConnection('off', message)
     const delay = Math.min(60000, 1000 * 2 ** state.reconnectAttempt++)
     state.reconnectTimer = setTimeout(connect, delay)
+  }
+
+  function stopTaskRosterRefresh() {
+    if (state.taskRosterRefreshTimer !== null) clearInterval(state.taskRosterRefreshTimer)
+    state.taskRosterRefreshTimer = null
+    state.taskRosterRefreshQueued = false
+  }
+
+  function startTaskRosterRefresh() {
+    stopTaskRosterRefresh()
+    if (!state.capabilities.has('workspace.list') || !state.capabilities.has('session.list')) return
+    state.taskRosterRefreshTimer = setInterval(() => {
+      if (!state.authenticated || !state.socket || state.socket.readyState !== WebSocket.OPEN) return
+      requestTaskRosterRefresh()
+    }, TASK_ROSTER_REFRESH_MS)
+  }
+
+  function requestTaskRosterRefresh() {
+    if (state.taskRosterRefreshInFlight) {
+      state.taskRosterRefreshQueued = true
+      return
+    }
+    void refreshWorkspacesAndTasks().catch(() => {})
   }
 
   function handleMessage(message) {
@@ -289,6 +317,7 @@
       state.queuesBySession.clear()
       renderQueuePanel()
       requestEventsBaseline()
+      startTaskRosterRefresh()
       void refreshAll()
       return
     }
@@ -412,18 +441,35 @@
 
   async function refreshWorkspacesAndTasks() {
     if (!state.capabilities.has('workspace.list') || !state.capabilities.has('session.list')) return
-    const [workspaceResult, sessionResult] = await Promise.all([rpc('workspace.list'), rpc('session.list')])
-    state.workspaces = workspaceResult?.items || []
-    state.archivedSessionIds = new Set(workspaceResult?.archivedSessionIds || [])
-    state.sessions = (sessionResult?.items || []).filter(item => item && item.sessionId)
-    if (state.currentSession) {
-      const refreshed = state.sessions.find(item => item.sessionId === state.currentSession.sessionId)
-      if (refreshed) Object.assign(state.currentSession, refreshed)
-      updateComposerState()
+    if (state.taskRosterRefreshInFlight) {
+      state.taskRosterRefreshQueued = true
+      return
     }
-    $('runningCount').textContent = String(state.sessions.filter(item => item.running).length)
-    renderTasks()
-    fillWorkspaceSelect()
+    state.taskRosterRefreshInFlight = true
+    try {
+      const socket = state.socket
+      const [workspaceResult, sessionResult] = await Promise.all([rpc('workspace.list'), rpc('session.list')])
+      // A reconnect can invalidate an older list response. Keep the roster
+      // from that response out of the newly authenticated connection.
+      if (socket !== state.socket || !state.authenticated) return
+      state.workspaces = workspaceResult?.items || []
+      state.archivedSessionIds = new Set(workspaceResult?.archivedSessionIds || [])
+      state.sessions = (sessionResult?.items || []).filter(item => item && item.sessionId)
+      if (state.currentSession) {
+        const refreshed = state.sessions.find(item => item.sessionId === state.currentSession.sessionId)
+        if (refreshed) Object.assign(state.currentSession, refreshed)
+        updateComposerState()
+      }
+      $('runningCount').textContent = String(state.sessions.filter(item => item.running).length)
+      renderTasks()
+      fillWorkspaceSelect()
+    } finally {
+      state.taskRosterRefreshInFlight = false
+      if (state.taskRosterRefreshQueued) {
+        state.taskRosterRefreshQueued = false
+        if (state.authenticated && state.socket?.readyState === WebSocket.OPEN) queueMicrotask(requestTaskRosterRefresh)
+      }
+    }
   }
 
   function sessionTitle(item) {
@@ -601,7 +647,10 @@
     state.historyEvents = []
     state.promptMode = 'queue'
     state.sessionPageOpen = true
-    applyProjectionValues(item?.projections?.values || {}, true, item?.projections?.asOfSeq)
+    // List projections are only a paint-ahead snapshot. Do not carry their
+    // sequence watermark into this session's history, or a stale list row can
+    // suppress the authoritative tail projection loaded below.
+    applyProjectionValues(item?.projections?.values || {}, true)
     $('sessionTitle').textContent = sessionTitle(item)
     $('sessionMeta').textContent = item.cwd || item.sessionId
     $('historyList').replaceChildren(messageNode('assistant', '正在加载历史记录'))
@@ -641,7 +690,10 @@
     const historyIsCurrent = () => historySeq === state.sessionHistorySeq
       && state.sessionPageOpen && state.currentSession?.sessionId === sessionId
     try {
-      const history = await rpc('session.history', { sessionId, maxMessages: 40 })
+      // A tool-heavy turn can contain dozens of append-origin tool results
+      // between two user messages. Ask for a wider host page; the relay then
+      // preserves conversation rows first and folds the remaining process.
+      const history = await rpc('session.history', { sessionId, maxMessages: 240 })
       if (!historyIsCurrent()) return
       state.historyEvents = mergeHistoryEvents(history?.events || [], state.historyEvents)
       state.permissions = history?.projections?.values?.permissions || null
@@ -671,10 +723,64 @@
     return String(Math.round(value))
   }
 
+  function formatStatsDuration(value) {
+    if (!Number.isFinite(value) || value <= 0) return '0s'
+    const seconds = value / 1000
+    if (seconds < 60) return `${Math.round(seconds * 10) / 10}s`
+    const whole = Math.round(seconds)
+    return `${Math.floor(whole / 60)}m${whole % 60}s`
+  }
+
+  function formatStatsTokens(value) {
+    if (!Number.isFinite(value) || value < 0) return '0'
+    if (value < 1_000) return String(Math.round(value))
+    if (value < 1_000_000) return `${Math.round(value >= 100_000 ? value / 1_000 : value / 100) / (value >= 100_000 ? 1 : 10)}K`
+    return `${Math.round(value >= 10_000_000 ? value / 1_000_000 : value / 100_000) / (value >= 10_000_000 ? 1 : 10)}M`
+  }
+
+  function renderStatsLine() {
+    const node = $('statsLine')
+    if (!node) return
+    const stats = state.sessionStats || {}
+    const usage = state.tokenUsage || {}
+    const groups = []
+    const steps = Number.isFinite(stats.steps) && stats.steps > 0 ? stats.steps : 0
+    if (steps > 0) {
+      const turns = Number.isFinite(stats.turns) && stats.turns >= 0 ? stats.turns : 0
+      groups.push(`${turns} 轮 · ${steps} 步`)
+      const durations = []
+      if (Number.isFinite(stats.llmMs) && stats.llmMs > 0) durations.push(`模型 ${formatStatsDuration(stats.llmMs)}`)
+      if (Number.isFinite(stats.toolMs) && stats.toolMs > 0) durations.push(`工具 ${formatStatsDuration(stats.toolMs)}`)
+      if (durations.length) groups.push(durations.join(' · '))
+      const speeds = []
+      if (Number.isFinite(stats.ttftSteps) && stats.ttftSteps > 0 && Number.isFinite(stats.ttftMs)) {
+        speeds.push(`首 token ${formatStatsDuration(stats.ttftMs / stats.ttftSteps)}`)
+      }
+      if (Number.isFinite(stats.decodeMs) && stats.decodeMs > 0 && Number.isFinite(stats.decodeTokens)) {
+        speeds.push(`${formatStatsTokens(stats.decodeTokens / (stats.decodeMs / 1000))} tok/s`)
+      }
+      if (speeds.length) groups.push(speeds.join(' · '))
+    }
+    const billedInput = ['uncachedInputTokens', 'cacheReadTokens', 'cacheWriteTokens']
+      .map(key => Number.isFinite(usage[key]) && usage[key] >= 0 ? usage[key] : 0)
+      .reduce((sum, value) => sum + value, 0)
+    const output = Number.isFinite(usage.outputTokens) && usage.outputTokens >= 0 ? usage.outputTokens : 0
+    if (billedInput > 0 || output > 0) {
+      if (billedInput > 0 && Number.isFinite(usage.cacheReadTokens) && usage.cacheReadTokens >= 0) {
+        groups.push(`缓存命中 ${Math.round(usage.cacheReadTokens / billedInput * 100)}%`)
+      }
+      groups.push(`输入 ${formatStatsTokens(billedInput)} · 输出 ${formatStatsTokens(output)}`)
+    }
+    node.textContent = groups.join(' | ')
+    node.hidden = groups.length === 0
+  }
+
   function applyProjectionValues(values, reset = false, seq) {
     if (reset) {
       state.contextPressure = null
       state.contextBreakdown = null
+      state.tokenUsage = null
+      state.sessionStats = null
       state.contextMeterOpen = false
       state.projectionSeqs.clear()
     }
@@ -688,7 +794,10 @@
     }
     apply('contextPressure', value => { state.contextPressure = value })
     apply('contextBreakdown', value => { state.contextBreakdown = value })
+    apply('tokenUsage', value => { state.tokenUsage = value })
+    apply('sessionStats', value => { state.sessionStats = value })
     renderContextMeter()
+    renderStatsLine()
   }
 
   function renderContextMeter() {
@@ -735,7 +844,7 @@
 
   function renderHistory(entries) {
     const list = $('historyList'); list.replaceChildren()
-    const rows = foldMessages(entries)
+    const rows = groupIntermediateRows(foldMessages(entries))
     if (!rows.length) list.appendChild(statusNode('还没有可显示的消息。'))
     for (const row of rows) list.appendChild(conversationNode(row))
     list.scrollTop = list.scrollHeight
@@ -749,41 +858,64 @@
     const pending = new Map()
     const toolsByCall = new Map()
     const toolsByStep = new Map()
+    const toolsByDispatch = new Map()
+    const thinkingByStep = new Map()
+    const compactionsById = new Map()
+    const retriesById = new Map()
     const keyOf = event => `${event?.data?.turn ?? event?.turn ?? ''}.${event?.data?.step ?? event?.step ?? ''}`
     for (const event of events) {
       const data = event?.data || {}
       if (event.type === 'user/message') {
-        const text = contentText(data.content)
-        const contextSummary = internalContextSummary(text)
+        const source = data.source
+        const sourceKind = source && typeof source === 'object' ? source.kind : undefined
+        const rawContent = data.content || data.message?.content
+        // Host history normally uses data.content. Keep the fallback for
+        // older relay snapshots that put the user content under message.
+        const text = sourceKind !== undefined && sourceKind !== 'user' ? '' : contentText(rawContent)
+        const contextSummary = sourceKind !== undefined && sourceKind !== 'user'
+          ? '已应用会话上下文'
+          : internalContextSummary(text)
         const row = contextSummary
-          ? { kind: 'context', text: contextSummary, id: data.id || `context-${event.seq}` }
-          : { kind: 'user', text, id: data.id || `user-${event.seq}` }
+          ? { kind: 'context', text: contextSummary, metadata: null, protected: true, id: data.id || `context-${event.seq}`, turn: data.turn }
+          : { kind: 'user', text, id: data.id || `user-${event.seq}`, turn: data.turn }
         rows.push(row); byId.set(row.id, row)
       } else if (event.type === 'context/injection') {
-        rows.push({ kind: 'context', text: data.summary || '已应用会话上下文', id: `context-${event.seq}` })
+        rows.push({ kind: 'context', text: data.summary || '已应用会话上下文', metadata: data.metadata || null, protected: true, id: `context-${event.seq}`, turn: data.turn })
       } else if (event.type === 'assistant/chunk' || event.type === 'message/chunk') {
         const chunk = data.chunk || data
         if (chunk.type && chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') continue
-        if (chunk.type === 'reasoning-delta' || data.kind === 'reasoning') continue
+        if (chunk.type === 'reasoning-delta' || data.kind === 'reasoning') {
+          const key = keyOf(event)
+          let row = thinkingByStep.get(key)
+          if (!row) { row = { kind: 'think', text: '', id: `think-${key}-${event.seq}`, turn: data.turn }; thinkingByStep.set(key, row); rows.push(row) }
+          row.text += chunk.text || ''
+          continue
+        }
         const key = keyOf(event)
         let row = pending.get(key)
         if (!row) {
-          row = { kind: 'assistant', text: '', id: `assistant-${key}-${event.seq}`, pending: true }
+          row = { kind: 'assistant', text: '', id: `assistant-${key}-${event.seq}`, pending: true, turn: data.turn }
           rows.push(row); pending.set(key, row)
         }
         row.text += chunk.text || ''
+      } else if (event.type === 'assistant/reasoning') {
+        const key = keyOf(event)
+        let row = thinkingByStep.get(key)
+        if (!row) { row = { kind: 'think', text: '', id: `think-${key}-${event.seq}`, turn: data.turn }; thinkingByStep.set(key, row); rows.push(row) }
+        row.text += data.text || ''
       } else if (event.type === 'assistant/message') {
         const message = data.message || data
         const id = message.id || data.id || `assistant-${event.seq}`
         const key = keyOf(event)
         const finalText = contentText(message.content)
+        if (typeof data.reasoning === 'string' && data.reasoning) rows.push({ kind: 'think', text: data.reasoning, id: `think-${event.seq}`, turn: data.turn })
         const row = byId.get(id) || pending.get(key)
         if (row) {
           row.text = finalText || row.text
           row.pending = false
           byId.set(id, row); pending.delete(key)
         } else {
-          const created = { kind: 'assistant', text: finalText, id }
+          const created = { kind: 'assistant', text: finalText, id, turn: data.turn }
           rows.push(created); byId.set(id, created)
         }
         for (const tool of toolsByStep.get(key) || []) tool.status = 'done'
@@ -793,8 +925,10 @@
       } else if (event.type === 'tool/call') {
         const key = keyOf(event)
         const callId = String(data.callId || `tool-${event.seq}`)
-        if (toolsByCall.has(callId)) continue
-        const tool = { kind: 'tool', name: data.name || 'tool', id: callId, status: 'running', turn: data.turn }
+      if (toolsByCall.has(callId)) continue
+        const presentation = window.DshToolSummary?.derive(data.name, data.arguments, data.summary)
+          || { title: data.name || 'tool', summary: '' }
+        const tool = { kind: 'tool', name: presentation.title, summary: presentation.summary, arguments: data.arguments, id: callId, status: 'running', turn: data.turn }
         toolsByCall.set(callId, tool)
         toolsByStep.set(key, [...(toolsByStep.get(key) || []), tool])
         rows.push(tool)
@@ -802,14 +936,87 @@
         const message = data.message || {}
         const callId = String(data.callId || message.source?.callId || '')
         const tool = toolsByCall.get(callId)
-        if (tool) tool.status = data.isError === true || message.content?.some?.(item => item?.isError === true) || data.error ? 'error' : 'done'
+        if (tool) {
+          tool.status = data.isError === true || message.content?.some?.(item => item?.isError === true) || data.error ? 'error' : 'done'
+          tool.output = data.output
+        }
+      } else if (event.type === 'tool/code-dispatch-start') {
+        const parentId = String(data.parentCallId || '')
+        const parent = toolsByCall.get(parentId)
+        const child = { kind: 'tool', name: data.name || 'tool', summary: data.summary || '', arguments: data.arguments, id: String(data.subCallId || `dispatch-${event.seq}`), status: 'running', turn: data.turn, parentId }
+        toolsByDispatch.set(child.id, child)
+        if (parent) parent.children = [...(parent.children || []), child]
+        else rows.push(child)
+      } else if (event.type === 'tool/code-dispatch') {
+        const child = toolsByDispatch.get(String(data.subCallId || ''))
+        if (child) { child.status = data.isError === true ? 'error' : 'done'; child.output = data.output }
+      } else if (event.type === 'mobile/compaction') {
+        const id = String(data.compactionId || `compaction-${event.seq}`)
+        let row = compactionsById.get(id)
+        if (!row) {
+          row = { kind: 'compaction', id, state: 'running', shadowedItems: 0, shadowedTokens: 0 }
+          compactionsById.set(id, row); rows.push(row)
+        }
+        row.state = data.state === 'error' ? 'error' : data.state === 'complete' ? 'complete' : 'running'
+        if (Number.isFinite(data.shadowedItems)) row.shadowedItems = data.shadowedItems
+        if (Number.isFinite(data.shadowedTokens)) row.shadowedTokens = data.shadowedTokens
+      } else if (event.type === 'mobile/model-retry') {
+        const id = String(data.retryId || `retry-${event.seq}`)
+        let row = retriesById.get(id)
+        if (!row) {
+          row = { kind: 'retry', id, retry: data.retry, maximum: data.maximum, delayMs: data.delayMs, state: data.state, turn: data.turn }
+          retriesById.set(id, row); rows.push(row)
+        } else {
+          row.retry = data.retry; row.maximum = data.maximum; row.delayMs = data.delayMs; row.state = data.state
+        }
+        row.time = event.time || Date.now()
       } else if (event.type === 'turn/end') {
         const failed = data.reason?.kind === 'error'
         for (const tool of rows.filter(row => row.kind === 'tool' && row.turn === data.turn)) tool.status = failed ? 'error' : 'done'
         if (failed) rows.push({ kind: 'error', text: '本轮执行失败', detail: '可返回桌面端查看完整错误信息。', id: `error-${event.seq}` })
+        if (data.reason?.kind === 'max-tokens') rows.push({ kind: 'max-tokens', id: `max-tokens-${event.seq}`, text: '已达到输出 token 上限', detail: '回答被截断；发送“继续”可让模型接着输出。' })
+        for (const retry of retriesById.values()) {
+          if (retry.turn === data.turn && retry.state === 'scheduled') retry.state = 'cancelled'
+        }
       }
     }
-    return rows.filter(row => row.kind === 'tool' || row.kind === 'error' || row.text)
+    return rows.filter(row => row.kind === 'tool' || row.kind === 'error' || row.kind === 'max-tokens'
+      || row.kind === 'context' || row.kind === 'compaction' || row.kind === 'retry' || row.text)
+  }
+
+  // Keep the transcript quiet by default. A user turn owns all of the work
+  // until the next user message; only its last assistant message stays open.
+  // Every other row is still available in one explicit disclosure, including
+  // tool calls, context metadata, retries, compaction and intermediate text.
+  function groupIntermediateRows(rows) {
+    const grouped = []
+    let bucket = []
+    const flush = () => {
+      if (!bucket.length) return
+      const hasUser = bucket.some(row => row.kind === 'user')
+      const finalAssistantIndex = [...bucket].map((row, index) => ({ row, index }))
+        .filter(entry => entry.row.kind === 'assistant').at(-1)?.index
+      const intermediate = bucket.filter((row, index) => row.kind !== 'user' && index !== finalAssistantIndex)
+      const finalAssistant = finalAssistantIndex === undefined ? null : bucket[finalAssistantIndex]
+      if (hasUser) {
+        grouped.push(...bucket.filter(row => row.kind === 'user'))
+        if (intermediate.length) grouped.push({ kind: 'run-summary', items: intermediate })
+        if (finalAssistant) grouped.push(finalAssistant)
+      } else {
+        if (intermediate.length) grouped.push({ kind: 'run-summary', items: intermediate })
+        if (finalAssistant) grouped.push(finalAssistant)
+      }
+      bucket = []
+    }
+    for (const row of rows) {
+      if (row.kind === 'user' && bucket.length && bucket.some(item => item.kind === 'user')) flush()
+      // Context snapshots preceding the first user message form their own
+      // prelude; they must not move below the user's message.
+      if (row.kind === 'user' && bucket.length && !bucket.some(item => item.kind === 'user')) flush()
+      bucket.push(row)
+    }
+    flush()
+    return grouped
   }
 
   function contentText(content) {
@@ -826,8 +1033,43 @@
   function conversationNode(row) {
     if (row.kind === 'tool') return toolNode(row)
     if (row.kind === 'error') return errorNode(row)
+    if (row.kind === 'max-tokens') return maxTokensNode(row)
     if (row.kind === 'context') return contextNode(row)
+    if (row.kind === 'compaction') return compactionNode(row)
+    if (row.kind === 'retry') return retryNode(row)
+    if (row.kind === 'run-summary') return runSummaryNode(row)
+    if (row.kind === 'think') return thinkNode(row)
     return messageNode(row.kind, row.text, row.pending === true, row.kind === 'assistant')
+  }
+
+  function runSummaryNode(row) {
+    const node = document.createElement('section'); node.className = 'agent-row run-summary-row'; node.dataset.open = 'false'
+    const summary = document.createElement('button'); summary.type = 'button'; summary.className = 'run-summary-head'
+    summary.setAttribute('aria-expanded', 'false')
+    const title = document.createElement('span'); title.className = 'agent-row-title'; title.textContent = '运行过程'
+    const count = document.createElement('span'); count.className = 'agent-row-summary'
+    const running = row.items.some(item => item.kind === 'tool' && item.status === 'running')
+    count.textContent = `${row.items.length} 项${running ? ' · 进行中' : ''}`
+    summary.append(title, count)
+    const body = document.createElement('div'); body.className = 'run-summary-body'
+    body.hidden = true
+    summary.onclick = () => {
+      const open = node.dataset.open !== 'true'
+      node.dataset.open = String(open)
+      summary.setAttribute('aria-expanded', String(open))
+      body.hidden = !open
+    }
+    for (const item of row.items) body.appendChild(conversationNode(item))
+    node.append(summary, body)
+    return node
+  }
+
+  function thinkNode(row) {
+    const node = document.createElement('div'); node.className = 'agent-row think-row'
+    const title = document.createElement('span'); title.className = 'agent-row-title'; title.textContent = 'Think'
+    const detail = document.createElement('span'); detail.className = 'agent-row-summary'; detail.textContent = row.text
+    node.append(title, detail)
+    return node
   }
 
   function messageNode(role, text, pending = false, copyable = false) {
@@ -924,11 +1166,23 @@
   }
 
   function toolNode(row) {
-    const node = document.createElement('div'); node.className = 'agent-row tool-row'; node.dataset.state = row.status
+    const node = document.createElement('details'); node.className = 'tool-tree'; node.dataset.state = row.status
     const title = document.createElement('span'); title.className = 'agent-row-title'; title.textContent = row.name
     const summary = document.createElement('span'); summary.className = 'agent-row-summary'
-    summary.textContent = row.status === 'error' ? '执行失败' : row.status === 'done' ? '已完成' : '正在执行'
-    node.append(title, summary)
+    summary.textContent = row.summary || (row.status === 'error' ? '执行失败' : row.status === 'done' ? '已完成' : '正在执行')
+    const state = document.createElement('span'); state.className = 'agent-row-state'
+    state.textContent = row.status === 'error' ? '失败' : row.status === 'done' ? '完成' : '运行中'
+    const head = document.createElement('summary')
+    head.className = 'agent-row tool-row'; head.dataset.state = row.status; head.append(title, summary, state)
+    node.appendChild(head)
+    // Nested tool calls are available after opening the run disclosure, but
+    // remain closed themselves so a large Code tree cannot flood the phone.
+    node.open = false
+    const body = document.createElement('div'); body.className = 'tool-tree-body'
+    const detail = [row.arguments ? `参数\n${row.arguments}` : '', row.output ? `输出\n${row.output}` : ''].filter(Boolean).join('\n\n')
+    if (detail) { const pre = document.createElement('pre'); pre.className = 'tool-detail'; pre.textContent = detail; body.appendChild(pre) }
+    for (const child of row.children || []) body.appendChild(toolNode(child))
+    if (body.childElementCount) node.appendChild(body)
     return node
   }
 
@@ -941,10 +1195,73 @@
   }
 
   function contextNode(row) {
-    const node = document.createElement('div'); node.className = 'agent-row context-row'
-    const title = document.createElement('span'); title.className = 'agent-row-title'; title.textContent = '上下文'
-    const summary = document.createElement('span'); summary.className = 'agent-row-summary'; summary.textContent = row.text
-    node.append(title, summary)
+    const node = document.createElement('details'); node.className = 'agent-row context-row'
+    const summary = document.createElement('summary'); summary.className = 'context-summary'
+    const title = document.createElement('span'); title.className = 'agent-row-title'; title.textContent = row.metadata?.role === 'recall' ? '会话召回' : '上下文注入'
+    const producer = document.createElement('span'); producer.className = 'agent-row-summary'; producer.textContent = row.metadata?.producerLabel || row.text || '已应用会话上下文'
+    summary.append(title, producer)
+    const body = document.createElement('div'); body.className = 'context-body'; body.dataset.form = row.metadata?.form || 'opaque'
+    const metadata = row.metadata
+    if (metadata?.form === 'instructions' && Array.isArray(metadata.changes)) {
+      appendContextList(body, metadata.changes.map(item => `${contextActionLabel(item.action)} · ${item.path}`))
+    } else if (metadata?.form === 'catalog' && Array.isArray(metadata.names)) {
+      if (metadata.replaced === true) appendContextNote(body, '上下文目录已替换')
+      appendContextList(body, metadata.names)
+    } else if (metadata?.form === 'snapshot' && Array.isArray(metadata.sectionNames)) {
+      appendContextNote(body, '此快照替代了更早的运行上下文')
+      appendContextList(body, metadata.sectionNames)
+    } else if (metadata?.form === 'relay' && metadata.senderSessionId) {
+      appendContextNote(body, `发送方会话：${metadata.senderSessionId}`)
+    } else if (metadata?.form === 'recall' && Array.isArray(metadata.references)) {
+      appendContextList(body, metadata.references.map(item => `${item.label} · 保留 ${item.retainedMessages} 条，省略 ${item.omittedMessages} 条${item.truncated ? '（已截断）' : ''}`))
+    }
+    appendContextNote(body, '正文仅桌面端可见')
+    if (metadata?.truncated === true) appendContextNote(body, `元数据已裁剪${metadata.omittedEntries ? `，省略 ${metadata.omittedEntries} 项` : ''}`)
+    node.append(summary, body)
+    return node
+  }
+
+  function contextActionLabel(action) {
+    return ({ loaded: '已加载', added: '已新增', updated: '已更新', removed: '已移除' })[action] || '已处理'
+  }
+
+  function appendContextList(parent, values) {
+    const list = document.createElement('ul'); list.className = 'context-details-list'
+    for (const value of values.slice(0, 50)) {
+      const item = document.createElement('li'); item.textContent = value; list.appendChild(item)
+    }
+    if (list.childElementCount) parent.appendChild(list)
+  }
+
+  function appendContextNote(parent, text) {
+    const note = document.createElement('p'); note.className = 'context-details-note'; note.textContent = text; parent.appendChild(note)
+  }
+
+  function compactionNode(row) {
+    const node = document.createElement('div'); node.className = 'agent-row lifecycle-row compaction-row'
+    const title = document.createElement('span'); title.className = 'agent-row-title'; title.textContent = '上下文压缩'
+    const detail = document.createElement('span'); detail.className = 'agent-row-summary'
+    detail.textContent = row.state === 'error' ? '压缩失败' : row.state === 'complete' ? `已完成 · ${row.shadowedItems || 0} 项` : '正在压缩上下文'
+    node.append(title, detail)
+    return node
+  }
+
+  function retryNode(row) {
+    const node = document.createElement('div'); node.className = `agent-row lifecycle-row retry-row ${row.state || ''}`
+    const title = document.createElement('span'); title.className = 'agent-row-title'; title.textContent = row.state === 'cancelled' ? '重试已取消' : '模型重试'
+    const maximum = Number.isFinite(row.maximum) && row.maximum > 0 ? `/${row.maximum}` : ''
+    const seconds = Number.isFinite(row.delayMs) && row.delayMs > 0 ? ` · 延迟 ${Math.ceil(row.delayMs / 1000)}s` : ''
+    const detail = document.createElement('span'); detail.className = 'agent-row-summary'
+    detail.textContent = row.state === 'started' ? `已开始第 ${row.retry} 次${maximum}${seconds}` : row.state === 'cancelled' ? '失败详情仅桌面端可见' : `等待第 ${row.retry} 次${maximum}${seconds}`
+    node.append(title, detail)
+    return node
+  }
+
+  function maxTokensNode(row) {
+    const node = document.createElement('div'); node.className = 'agent-row lifecycle-row max-tokens-row'
+    const title = document.createElement('strong'); title.textContent = row.text
+    const detail = document.createElement('span'); detail.textContent = row.detail
+    node.append(title, detail)
     return node
   }
 
@@ -1614,7 +1931,7 @@
         if (!state.historyEvents.some(entry => (entry?.event || entry)?.seq === seq)) state.historyEvents.push({ event: frame.event })
         renderHistory(state.historyEvents)
       }
-      void refreshWorkspacesAndTasks().catch(() => {})
+      requestTaskRosterRefresh()
     } else if (frame.type === 'session/queue') {
       state.queuesBySession.set(frame.sessionId, Array.isArray(frame.items) ? frame.items : [])
       if (state.currentSession?.sessionId === frame.sessionId) renderQueuePanel()
@@ -1630,7 +1947,7 @@
       state.archivedSessionIds = new Set(frame.archivedSessionIds || [])
       renderTasks()
     } else if (frame.type === 'session/jobs') {
-      void refreshWorkspacesAndTasks().catch(() => {})
+      requestTaskRosterRefresh()
     }
   }
 
@@ -2179,6 +2496,9 @@
       if (!state.contextMeterOpen || $('contextMeterRoot').contains(event.target)) return
       state.contextMeterOpen = false
       renderContextMeter()
+    })
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && state.authenticated) requestTaskRosterRefresh()
     })
     document.addEventListener('keydown', event => {
       if (event.key !== 'Escape' || !state.contextMeterOpen) return

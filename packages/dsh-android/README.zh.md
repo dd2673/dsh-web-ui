@@ -9,6 +9,9 @@ DSH Remote Companion 是 DeepSeek Harness 的社区维护第三方 Android 配�
 - 在本地 Android WebView 壳中打开远程 DeepSeek Harness 会话。
 - 保持队列紧凑：每条可见项目只占一行短文本和图标操作，展开的队列可滚动并显示完整列表。
 - composer 空白时保持一行，随输入最多扩展到五行，以保留更多对话上下文空间。
+- 发送和停止使用 48 px 圆形纯图标主按钮；窄屏上辅助 composer 控件保持适合触控的尺寸并支持横向滚动。
+- 展示安全的上下文元数据、压缩/重试/token 上限生命周期行，以及 Host 提供的 token 和会话统计；上下文正文和诊断信息不会下发到 Android。
+- 会话按“用户发言 → 最后 Agent 回复”保持安静；中间的 Think、工具调用、Code 子调用、上下文和生命周期摘要合并到一个默认收起的“运行过程”项，展开后可继续查看多层工具树、参数和结果。
 - 已完成的模型回复下方提供紧凑复制图标，一键复制完整 Markdown 原文。
 - 在当前会话中处理一次性工具审批、DSH 原生计划审查和通用问题组；问题组支持单选、多选、自由文本和跳过本题，保留 Host 提供的原始选项值，并在收到权威 resolved 事件后才移除操作卡片。
 - 从工作区或受限的主机目录选择器创建会话，并在已配对设备上记住工作区折叠和置顶状态。
@@ -81,6 +84,6 @@ $env:DSH_ANDROID_RELEASE_CERT_SHA256 = '<release-certificate-sha256>'
 
 - Git 和 SSH 控制不属于首个公开版本。
 - lifecycle 控制依赖外部兼容 agent；没有该 agent 时不可用。
-- Android 客户端仅显示 Host 提供的上下文压力和明细数据，不在本地估算上下文占用。
+- Android 客户端显示 Host 提供的上下文压力、明细、token 使用量、会话统计和安全上下文元数据；不在本地估算上下文占用，也不会在手机上显示上下文正文。
 
 代码维护和缺陷统一提交到[维护者自己的 Issue tracker](https://github.com/dd2673/dsh-web-ui/issues/1)。

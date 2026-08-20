@@ -9,6 +9,9 @@ DSH Remote Companion is a community-maintained third-party Android companion for
 - Opens remote DeepSeek Harness sessions in a local Android WebView shell.
 - Keeps the queue compact: each visible item is one short line with icon actions, while the expanded queue is scrollable and reveals the full list.
 - Keeps the composer to one line when empty and grows with input up to five lines, preserving conversation context space.
+- Uses a 48 px circular icon-only send/stop control; secondary composer controls remain touch-sized and horizontally scrollable on narrow screens.
+- Discloses safe context metadata, compaction/retry/max-token lifecycle rows, and host-provided token/session statistics without sending context bodies or diagnostics to Android.
+- Keeps each task quiet as user message plus final Agent reply; intermediate Think, tool, Code sub-dispatch, context, and lifecycle rows live in one collapsed "运行过程" item, with nested tool details, arguments, and results available on expansion.
 - Copies a completed model reply as full Markdown from one compact icon action below the message.
 - Handles one-time tool approvals, native DSH plan reviews, and general DSH question batches in the active conversation. Question batches support single choice, multi-choice, free-form answers, and skips while preserving host-provided option values and waiting for authoritative resolution before dismissing the card.
 - Creates a session from a workspace or a bounded host directory picker, and remembers workspace collapse and pin state on the paired device.
@@ -85,6 +88,6 @@ $env:DSH_ANDROID_RELEASE_CERT_SHA256 = '<release-certificate-sha256>'
 
 - Git and SSH controls are not part of the initial public release.
 - Lifecycle controls require an external compatible agent and are unavailable without one.
-- The Android client displays host-provided context pressure and breakdown data; it does not estimate context usage locally.
+- The Android client displays host-provided context pressure, breakdown, token usage, session statistics, and safe context metadata; it does not estimate context usage locally and does not display context bodies on the phone.
 
 Code maintenance and defect reports belong in the [maintainer-owned issue tracker](https://github.com/dd2673/dsh-web-ui/issues/1).

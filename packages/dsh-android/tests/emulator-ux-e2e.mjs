@@ -150,6 +150,65 @@ const persistedCollapse = await evaluate(`(() => {
 })()`)
 assert.equal(persistedCollapse, true)
 
+// A busy session can emit another mux event while session.list is still in
+// flight. That event must queue one follow-up roster refresh instead of being
+// dropped, otherwise a concurrently-created desktop session stays invisible.
+await evaluate(`(() => {
+  const harness = { originalSend: WebSocket.prototype.send, listRequests: [] }
+  window.__dshRosterRefreshHarness = harness
+  WebSocket.prototype.send = function (value) {
+    let frame
+    try { frame = JSON.parse(String(value)) } catch (_) { return harness.originalSend.call(this, value) }
+    if (frame.type === 'rpc.request' && frame.method === 'session.list') {
+      harness.listRequests.push({ socket: this, frame })
+      return
+    }
+    return harness.originalSend.call(this, value)
+  }
+  document.getElementById('refreshTasks').click()
+})()`)
+await waitFor(`window.__dshRosterRefreshHarness.listRequests.length === 1`)
+await evaluate(`(() => {
+  const harness = window.__dshRosterRefreshHarness
+  const first = harness.listRequests[0]
+  first.socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+    v: 1,
+    type: 'event',
+    payload: { rpcId: 'e2e-busy-event', payload: {
+      type: 'session/event', sessionId: 'e2e-busy-session',
+      event: { seq: 900001, type: 'assistant/chunk', data: { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'busy' } } },
+    } },
+  }) }))
+  first.socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+    v: 1,
+    type: 'rpc.response',
+    messageId: first.frame.messageId,
+    payload: { result: { ok: true, value: { items: [], hasMore: false } } },
+  }) }))
+})()`)
+await waitFor(`window.__dshRosterRefreshHarness.listRequests.length === 2`)
+await evaluate(`(() => {
+  const harness = window.__dshRosterRefreshHarness
+  const second = harness.listRequests[1]
+  second.socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+    v: 1,
+    type: 'rpc.response',
+    messageId: second.frame.messageId,
+    payload: { result: { ok: true, value: { items: [{
+      sessionId: 'e2e-concurrent-new-session', cwd: 'D:\\\\AI\\\\DeepSeek', updatedAt: Date.now(), running: false,
+      projections: { values: { title: 'E2E_QUEUED_REFRESH_NEW_SESSION' } },
+    }], hasMore: false } } },
+  }) }))
+})()`)
+await waitFor(`document.getElementById('taskList').textContent.includes('E2E_QUEUED_REFRESH_NEW_SESSION')`)
+await evaluate(`(() => {
+  const harness = window.__dshRosterRefreshHarness
+  WebSocket.prototype.send = harness.originalSend
+  delete window.__dshRosterRefreshHarness
+  document.getElementById('refreshTasks').click()
+})()`)
+await waitFor(`!document.getElementById('taskList').textContent.includes('E2E_QUEUED_REFRESH_NEW_SESSION')`)
+
 await touchSwipe('#taskList .session-swipe .row-card', 0.82, 0.34)
 assert.equal(await evaluate(`document.querySelector('[data-e2e-swipe-target]').closest('.session-swipe').classList.contains('open')`), true)
 assert.equal(await evaluate(`(() => {
@@ -260,10 +319,95 @@ await evaluate(`(() => {
     v: 1,
     type: 'rpc.response',
     messageId: current.frame.messageId,
-    payload: { result: { ok: true, value: { events: [{ event: { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: 'E2E_CURRENT_HISTORY' }] } } }], projections: { values: {} } } } },
+    payload: { result: { ok: true, value: {
+      events: [
+        { event: { seq: 0, type: 'user/message', data: { content: [{ type: 'text', text: 'E2E_PREVIOUS_HISTORY' }] } } },
+        { event: { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: 'E2E_CURRENT_HISTORY' }] } } },
+        { event: { seq: 2, type: 'assistant/message', data: { turn: 1, step: 1, message: { id: 'e2e-intermediate', role: 'assistant', content: [{ type: 'text', text: 'E2E_INTERMEDIATE_PROCESS' }] } } } },
+        { event: { seq: 3, type: 'context/injection', data: { summary: '已应用工作区说明', metadata: {
+          role: 'inject', producerLabel: 'AGENTS.md', form: 'instructions', bodyAvailability: 'desktop-only',
+          changes: [{ action: 'loaded', path: 'AGENTS.md' }],
+        } } } },
+        { event: { seq: 4, type: 'tool/call', data: { turn: 1, step: 1, callId: 'e2e-tool', name: 'run_code', summary: 'List web profile, search imap.qq.com references', arguments: '{"description":"List web profile, search imap.qq.com references"}' } } },
+        { event: { seq: 5, type: 'tool/code-dispatch-start', data: { turn: 1, step: 1, rootCallId: 'e2e-tool', parentCallId: 'e2e-tool', subCallId: 'e2e-child', name: 'pwsh', summary: 'List web profile files', arguments: '{"description":"List web profile files"}' } } },
+        { event: { seq: 6, type: 'tool/code-dispatch', data: { turn: 1, step: 1, rootCallId: 'e2e-tool', parentCallId: 'e2e-tool', subCallId: 'e2e-child', name: 'pwsh', summary: 'List web profile files', isError: false, output: '[{"type":"text","text":"profile.json"}]' } } },
+        { event: { seq: 7, type: 'tool/result', data: { turn: 1, step: 1, callId: 'e2e-tool', isError: false, output: '[{"type":"text","text":"done"}]' } } },
+        { event: { seq: 8, type: 'mobile/compaction', data: { compactionId: 'e2e-compact', state: 'running' } } },
+        { event: { seq: 9, type: 'mobile/compaction', data: { compactionId: 'e2e-compact', state: 'complete', shadowedItems: 4 } } },
+        { event: { seq: 10, type: 'mobile/model-retry', data: { retryId: 'e2e-retry', turn: 2, retry: 1, maximum: 2, delayMs: 1000, state: 'scheduled' } } },
+        { event: { seq: 11, type: 'mobile/model-retry', data: { retryId: 'e2e-retry', turn: 2, retry: 1, maximum: 2, delayMs: 1000, state: 'started' } } },
+        { event: { seq: 12, type: 'assistant/message', data: { turn: 1, step: 2, message: { id: 'e2e-final', role: 'assistant', content: [{ type: 'text', text: 'E2E_FINAL_REPLY' }] } } } },
+        { event: { seq: 13, type: 'turn/end', data: { turn: 2, reason: { kind: 'max-tokens' } } } },
+      ],
+      projections: { asOfSeq: 7, values: {
+        contextPressure: { projectedTokens: 6400, contextWindow: 16000 },
+        contextBreakdown: { systemTokens: 1200, toolsTokens: 800, messageTokens: 4400 },
+        tokenUsage: { uncachedInputTokens: 1200, cacheReadTokens: 800, outputTokens: 256 },
+        sessionStats: { turns: 2, steps: 4, llmMs: 2400, toolMs: 900, ttftMs: 500, ttftSteps: 2, decodeMs: 1200, decodeTokens: 256 },
+      } },
+    } } },
   }) }))
 })()`)
 await waitFor(`document.getElementById('historyList').textContent.includes('E2E_CURRENT_HISTORY')`)
+    const lifecycleDisclosure = await evaluate(`(() => {
+  const context = document.querySelector('#historyList details.context-row')
+  context?.querySelector('summary')?.click()
+    const runSummary = document.querySelector('#historyList .run-summary-row')
+    const closedHeight = runSummary?.getBoundingClientRect().height || 0
+    runSummary?.querySelector('.run-summary-head')?.click()
+    const openHeight = runSummary?.getBoundingClientRect().height || 0
+    const openBody = runSummary?.querySelector('.run-summary-body')?.getBoundingClientRect()
+    const openRow = runSummary?.getBoundingClientRect()
+    const expandedNoOverlap = Boolean(openBody && openRow && openBody.height > 0
+      && openRow.height >= openBody.height
+      && openBody.bottom <= openRow.bottom + 1
+      && document.documentElement.scrollWidth <= window.innerWidth + 1)
+    runSummary?.querySelector('.run-summary-head')?.click()
+    return {
+    contextCount: document.querySelectorAll('#historyList details.context-row').length,
+    contextOpen: context?.open === true,
+    metadataOnly: context?.textContent.includes('正文仅桌面端可见') === true,
+    runSummaryCount: document.querySelectorAll('#historyList .run-summary-row').length,
+      runSummaryClosed: runSummary?.dataset.open !== 'true',
+      runSummarySingleLine: runSummary?.querySelector('.run-summary-head')?.textContent.includes('运行过程') === true,
+      historyUserCount: document.querySelectorAll('#historyList > .message.user').length,
+      historicalUserVisible: [...document.querySelectorAll('#historyList > .message.user')].some(node => node.textContent.includes('E2E_PREVIOUS_HISTORY')),
+      expandedNoOverlap,
+      expandedHeight: openHeight > closedHeight,
+    intermediateHidden: !document.getElementById('historyList').textContent.includes('E2E_INTERMEDIATE_PROCESS') || runSummary?.dataset.open !== 'true',
+      userMessageVisible: [...document.querySelectorAll('#historyList > .message.user')].some(node => node.textContent.includes('E2E_CURRENT_HISTORY')),
+    finalReplyVisible: document.getElementById('historyList').textContent.includes('E2E_FINAL_REPLY'),
+    toolSummary: document.getElementById('historyList').textContent.includes('Code') && document.getElementById('historyList').textContent.includes('List web profile'),
+    nestedTool: document.querySelectorAll('#historyList .tool-tree-body .tool-tree').length === 1,
+    compaction: document.querySelectorAll('#historyList .compaction-row').length,
+    retry: document.querySelectorAll('#historyList .retry-row').length,
+    maxTokens: document.querySelectorAll('#historyList .max-tokens-row').length,
+    statsVisible: document.getElementById('statsLine').hidden === false,
+    statsText: document.getElementById('statsLine').textContent,
+  }
+})()`)
+assert.deepEqual(lifecycleDisclosure, {
+  contextCount: 1,
+  contextOpen: true,
+  metadataOnly: true,
+  runSummaryCount: 1,
+  runSummaryClosed: true,
+  runSummarySingleLine: true,
+  historyUserCount: 2,
+  historicalUserVisible: true,
+  expandedNoOverlap: true,
+  expandedHeight: true,
+  intermediateHidden: true,
+  userMessageVisible: true,
+  finalReplyVisible: true,
+  toolSummary: true,
+  nestedTool: true,
+  compaction: 1,
+  retry: 1,
+  maxTokens: 1,
+  statsVisible: true,
+  statsText: '2 轮 · 4 步 | 模型 2.4s · 工具 0.9s | 首 token 0.3s · 213 tok/s | 缓存命中 40% | 输入 2K · 输出 256',
+})
 await evaluate(`(() => {
   const stale = window.__dshNewSessionHarness.historyRequests.get('e2e-new-session')
   stale.socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
@@ -308,11 +452,23 @@ assert.deepEqual(sessionLayout, {
 const composerActionsLayout = await evaluate(`(() => {
   const row = document.querySelector('.composer-actions')
   const rowRect = row.getBoundingClientRect()
+  const tools = document.querySelector('.composer-tools')
+  const primary = document.querySelector('.composer-primary-actions')
   const buttons = [...row.querySelectorAll('button')].filter(button => button.getBoundingClientRect().width > 0)
   const rects = buttons.map(button => button.getBoundingClientRect())
+  const toolButtons = [...tools.querySelectorAll('button')].filter(button => button.getBoundingClientRect().width > 0)
+  const primaryButtons = [...primary.querySelectorAll('button')]
   return {
-    oneRow: rects.every(rect => Math.abs(rect.top - rects[0].top) <= 1),
-    equalHeight: rects.every(rect => Math.abs(rect.height - 26) <= 1),
+    oneRow: rects.every(rect => rect.top >= rowRect.top - 1 && rect.bottom <= rowRect.bottom + 1),
+    toolHeight: toolButtons.every(button => Math.abs(button.getBoundingClientRect().height - 36) <= 1),
+    primaryHeight: primaryButtons.every(button => Math.abs(button.getBoundingClientRect().height - 48) <= 1),
+    primaryCircular: primaryButtons.every(button => {
+      const rect = button.getBoundingClientRect()
+      return Math.abs(rect.width - 48) <= 1 && Math.abs(rect.height - 48) <= 1
+        && getComputedStyle(button).borderRadius === '999px'
+    }),
+    toolsScrollable: tools.scrollWidth >= tools.clientWidth,
+    primaryActions: primaryButtons.length === 2,
     noOverflow: row.scrollWidth <= row.clientWidth + 1 && rects.at(-1).right <= rowRect.right + 1,
     iconOnlyPrimaryActions: ['attachmentButton', 'cancelSession', 'sendPrompt'].every(id => {
       const button = document.getElementById(id)
@@ -323,7 +479,11 @@ const composerActionsLayout = await evaluate(`(() => {
   }
 })()`)
 assert.equal(composerActionsLayout.oneRow, true)
-assert.equal(composerActionsLayout.equalHeight, true)
+assert.equal(composerActionsLayout.toolHeight, true)
+assert.equal(composerActionsLayout.primaryHeight, true)
+assert.equal(composerActionsLayout.primaryCircular, true)
+assert.equal(composerActionsLayout.toolsScrollable, true)
+assert.equal(composerActionsLayout.primaryActions, true)
 assert.equal(composerActionsLayout.noOverflow, true)
 assert.equal(composerActionsLayout.iconOnlyPrimaryActions, true)
 assert.ok(composerActionsLayout.permissionLabel.length <= 3)
