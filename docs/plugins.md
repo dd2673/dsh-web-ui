@@ -21,7 +21,10 @@ packages/<name>/
 │   └── client.ts      # browser 半区（Web GUI 侧）
 ├── tsconfig.json
 ├── tsdown.config.ts
-└── README.md
+├── README.md          # 英文版（含 H1 后语言切换行）
+├── README.zh.md       # 中文版（结构与英文镜像）
+├── README.i18n.yaml   # 配对一致性记录（docs/i18n.md）
+└── AGENTS.md          # 包级 AI 指令（可选，复杂包建议写）
 ```
 
 ### 2. 实现插件逻辑
@@ -96,6 +99,16 @@ dsh plugin --profile web add link:<dsh-web-ui>/packages/dsh-web-ui-all
    - 版权归原作者，本仓库仅托管，不主张版权。
 3. **合规红线**：无 LICENSE、作者未授权、或版权归属不明的代码，一律不收编。
 
+### 社区插件索引登记
+
+第三方插件作者可把自己的插件登记进「社区插件」卡片（设置 → 插件配置 → Web UI 插件），卡片列出条目并链接到作者自己的仓库：
+
+1. 在 `packages/dsh-web-ui-settings/community.json` 追加条目：`id` / `name` / `nameEn` / `author` / `repo`（https:// 仓库 URL）必填，`description` / `descriptionEn` / `npm` 可选；
+2. 运行 `node scripts/community-index` 重新生成注册表并提交生成的 `packages/dsh-web-ui-settings/src/client/generated/community.ts`；
+3. `pnpm community:check` 校验数据与生成物一致（CI 门禁）。
+
+索引只收录链接、不搬代码，条目版权归原作者，由维护者审核合并。
+
 ## 插件规范要点
 
 - **package.json 的 `dsh.bundle.patch` 声明**：指向包内 `cordis.patch.yml`，这是官方 bundle 清单，`dsh plugin` 依赖它识别与挂载插件。
@@ -132,3 +145,6 @@ dsh plugin --profile web add link:<dsh-web-ui>/packages/dsh-web-ui-all
   1. **host 半区**：`installSettingsSection(ctx, settingsNamespace('<ns>'), <z-schema>, <composition entry>, { setSource, onChange })`（`@deepseek-ai/dsh-settings`）注册命名空间；`setSource` 注入动态读取器，`onChange` 让已派生的行为跟随已提交的修改，无需重启。
   2. **browser 半区**：注入 `settingsScope`（`@deepseek-ai/dsh-client-ui-settings` 提供 `ctx.settingsScope`；`bind()` 还要求调用方注入 `connection` 与 `remote`），`ctx.settingsScope.bind({ namespace })` 读写该命名空间，并注册 `web-ui.plugin.item` 卡片（自行 `declare module '@deepseek-ai/dsh-client-ui-slots'` 声明该槽，shape 与 `ui-plugin-config` 一致；slot `order` 用 100+ 避开内置卡片）。样板实现见 `packages/dsh-remote-web-ui`（`src/client/settings-form.ts` + `PluginSettingsCard.tsx` + `*SettingsCard.tsx`，自包含的 staged 表单，不依赖兄弟 UI 包）。
 - **皮肤类插件**：改用 `scripts/dsh-skin-new` 脚手架（皮肤规范见 skin-center / 各皮肤包 README），不经过本流程第 3-4 步的 `dsh-web-ui-all` 注册。皮肤中心（skin-center）虽是皮肤聚合，其 GUI 卡片与功能插件一样注册进 `web-ui.plugin.item` 组（设置 → 插件配置 → Web UI 插件），不占设置页一级分区。
+## 移植 harness 插件的挂载约束
+
+聚合包 insert 行不带 `config`，loader 调 `apply` 前会用插件 schema 默认值填充配置；`apply` 若无条件加载时校验会把填充后的空配置当配置而抛错，profile 加载失败。应改为：组合条目配置了关键字段才在加载时校验，否则调用时提示「未配置」（settings section 提交仍严格校验）。参考 `packages/dsh-tool-describe-image`。

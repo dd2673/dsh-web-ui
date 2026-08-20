@@ -9,16 +9,24 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { PairingPhase } from '../pairing.ts'
+import { parseRelayUrl } from '../relay-url.ts'
 import { RemotePanel, type PanelState } from './RemotePanel.tsx'
-import { copyText, issuePair, stopPair, type IssueResponse, type PairStateFrame, type TunnelStatusFrame } from './pair-api.ts'
+import type { RemoteSettingsCardFace } from './RemoteSettingsCard.tsx'
+import {
+  copyText, issuePair, relayConfigStatus, relayTokenStatus, revokeRelayToken, rotateRelayToken,
+  saveRelayConfig, stopPair,
+  type IssueResponse, type PairStateFrame, type RelayTokenStatus, type TunnelStatusFrame,
+} from './pair-api.ts'
 import { PhoneIcon } from './PhoneIcon.tsx'
 import { UpdateEntry } from './UpdateEntry.tsx'
 import css from './remote.module.css'
 
-/** Entry props: the sidebar column state + the standard locale seat. */
-export type RemoteEntryProps = PropsRuntime<'sidebar.remote'> & PropsLocale<'remote'>
+/** Entry props: sidebar runtime, locale, and the shared remote settings form. */
+export type RemoteEntryProps = PropsRuntime<'sidebar.remote'>
+  & PropsLocale<'remote'>
+  & InjectFace<RemoteSettingsCardFace>
 
 /** Apply one status frame onto the current ready state. */
 function mergeFrame(state: PanelState, frame: PairStateFrame): PanelState {
@@ -37,11 +45,24 @@ function mergeFrame(state: PanelState, frame: PairStateFrame): PanelState {
  * @param props - composed slot props (contract in this package).
  * @returns the entry element tree.
  */
-export function RemoteEntry({ wide, useWorkspaces, t }: RemoteEntryProps) {
+export function RemoteEntry({ wide, useWorkspaces, useRemoteSettingsCard, edit, saveRelayUrl, t }: RemoteEntryProps) {
   const [open, setOpen] = useState(false)
   const [state, setState] = useState<PanelState>({ kind: 'lan-required' })
   const [copied, setCopied] = useState(false)
+  const [relayToken, setRelayToken] = useState<RelayTokenStatus | undefined>(undefined)
+  const [relayTokenBusy, setRelayTokenBusy] = useState(false)
+  const [relayTokenCopied, setRelayTokenCopied] = useState(false)
+  const [relayTokenError, setRelayTokenError] = useState<string | undefined>(undefined)
+  const [directRelay, setDirectRelay] = useState({
+    loaded: false,
+    writable: false,
+    persisted: '',
+    draft: '',
+    saving: false,
+    failed: false,
+  })
   const eventSource = useRef<EventSource | undefined>(undefined)
+  const relaySettings = useRemoteSettingsCard(snapshot => snapshot)
 
   // The current workspace (the recent-workspace projection the shell's New
   // Session flow targets) — the deep-link target for the phone.
@@ -90,8 +111,24 @@ export function RemoteEntry({ wide, useWorkspaces, t }: RemoteEntryProps) {
 
   const openPanel = useCallback(async (): Promise<void> => {
     setOpen(true)
+    if (!relaySettings.exposed) {
+      void relayConfigStatus().then(
+        value => {
+          setDirectRelay({
+            loaded: true,
+            writable: value.writable,
+            persisted: value.relayUrl,
+            draft: value.relayUrl,
+            saving: false,
+            failed: false,
+          })
+        },
+        () => { setDirectRelay(previous => ({ ...previous, loaded: false, failed: true })) },
+      )
+    }
     const next = await mint()
     setState(next)
+    void relayTokenStatus().then(setRelayToken, () => { setRelayTokenError(t('relayToken.error')) })
     // Live status: the desktop panel mirrors the pairing service state. The
     // stream only makes sense in the ready state — on a failure banner the
     // events endpoint is unreachable too (loopback fence), so opening it
@@ -108,7 +145,7 @@ export function RemoteEntry({ wide, useWorkspaces, t }: RemoteEntryProps) {
         // Malformed frames are dropped; the snapshot on open is authoritative.
       }
     }
-  }, [mint])
+  }, [mint, relaySettings.exposed, t])
 
   const closePanel = useCallback(() => {
     closeEventSource()
@@ -164,6 +201,81 @@ export function RemoteEntry({ wide, useWorkspaces, t }: RemoteEntryProps) {
     })
   }, [state])
 
+  const handleRotateRelayToken = useCallback(() => {
+    setRelayTokenBusy(true)
+    setRelayTokenError(undefined)
+    void rotateRelayToken().then(
+      (value) => { setRelayToken(value); setRelayTokenBusy(false) },
+      () => { setRelayTokenError(t('relayToken.error')); setRelayTokenBusy(false) },
+    )
+  }, [t])
+
+  const handleRevokeRelayToken = useCallback(() => {
+    setRelayTokenBusy(true)
+    setRelayTokenError(undefined)
+    void revokeRelayToken().then(
+      (value) => { setRelayToken(value); setRelayTokenBusy(false) },
+      () => { setRelayTokenError(t('relayToken.error')); setRelayTokenBusy(false) },
+    )
+  }, [t])
+
+  const handleCopyRelayToken = useCallback(() => {
+    if (relayToken?.pairingUri === undefined) return
+    void copyText(relayToken.pairingUri).then((ok) => {
+      if (!ok) return
+      setRelayTokenCopied(true)
+      window.setTimeout(() => { setRelayTokenCopied(false) }, 1500)
+    })
+  }, [relayToken])
+
+  const handleEditRelayUrl = useCallback((value: string) => {
+    setRelayTokenError(undefined)
+    if (relaySettings.exposed) edit('relayUrl', value)
+    else setDirectRelay(previous => ({ ...previous, draft: value, failed: false }))
+  }, [edit, relaySettings.exposed])
+
+  const handleSaveRelaySettings = useCallback(() => {
+    setRelayTokenError(undefined)
+    if (relaySettings.exposed) {
+      void saveRelayUrl().then((saved) => {
+        if (!saved) return
+        void relayTokenStatus().then(setRelayToken, () => { setRelayTokenError(t('relayToken.error')) })
+      })
+      return
+    }
+    if (parseRelayUrl(directRelay.draft) === undefined) return
+    setDirectRelay(previous => ({ ...previous, saving: true, failed: false }))
+    void saveRelayConfig(directRelay.draft).then(
+      value => {
+        setDirectRelay({
+          loaded: true,
+          writable: value.writable,
+          persisted: value.relayUrl,
+          draft: value.relayUrl,
+          saving: false,
+          failed: false,
+        })
+        void relayTokenStatus().then(setRelayToken, () => { setRelayTokenError(t('relayToken.error')) })
+      },
+      () => { setDirectRelay(previous => ({ ...previous, saving: false, failed: true })) },
+    )
+  }, [directRelay.draft, relaySettings.exposed, saveRelayUrl, t])
+
+  const directRelayParsed = parseRelayUrl(directRelay.draft)
+  const panelRelaySettings = relaySettings.exposed ? relaySettings : {
+    available: relaySettings.available,
+    exposed: directRelay.loaded,
+    writable: directRelay.writable,
+    relayUrl: {
+      text: directRelay.draft,
+      overridden: directRelay.persisted !== '',
+      invalid: directRelayParsed === undefined,
+    },
+    relayUrlDirty: directRelay.draft.trim() !== directRelay.persisted,
+    relayUrlSaving: directRelay.saving,
+    relayUrlFailed: directRelay.failed,
+  }
+
   return (
     <>
       <div className={css.entryRow} data-rail={wide ? undefined : 'rail'}>
@@ -177,10 +289,20 @@ export function RemoteEntry({ wide, useWorkspaces, t }: RemoteEntryProps) {
             t={t}
             state={state}
             copied={copied}
+            relayToken={relayToken}
+            relayTokenBusy={relayTokenBusy}
+            relayTokenCopied={relayTokenCopied}
+            relayTokenError={relayTokenError}
+            relaySettings={panelRelaySettings}
             onClose={closePanel}
             onStop={handleStop}
             onRefresh={handleRefresh}
             onCopy={handleCopy}
+            onRotateRelayToken={handleRotateRelayToken}
+            onRevokeRelayToken={handleRevokeRelayToken}
+            onCopyRelayToken={handleCopyRelayToken}
+            onEditRelayUrl={handleEditRelayUrl}
+            onSaveRelaySettings={handleSaveRelaySettings}
             onPickAddress={handlePickAddress}
             onPickPublic={handlePickPublic}
           />

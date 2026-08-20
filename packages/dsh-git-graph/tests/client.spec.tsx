@@ -8,7 +8,7 @@
  * the create/graph dialogs behave (validation, duplicate copy, lane
  * rendering).
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { BranchesView, GraphView, RepoStatus, SwitchResult } from '../src/core/types.ts'
@@ -34,6 +34,19 @@ function makeTranslate(): BranchChipProps['t'] {
   }
 }
 
+/** Resolve the positioning anchor of a mounted chip (its parent is chipWrap). */
+function anchorOf(chip: HTMLElement): HTMLElement {
+  const anchor = chip.parentElement?.closest<HTMLElement>('[data-gitgraph-chip-anchor]')
+  if (anchor === null || anchor === undefined) throw new Error('BranchChip anchor not found')
+  return anchor
+}
+
+/** Wait one animation frame when the environment provides requestAnimationFrame. */
+function nextFrame(): Promise<void> {
+  if (typeof requestAnimationFrame !== 'function') return Promise.resolve()
+  return new Promise<void>((resolve) => { requestAnimationFrame(() => { resolve() }) })
+}
+
 interface BenchOptions {
   cwd?: string
   blank?: boolean
@@ -44,10 +57,19 @@ interface BenchOptions {
   graphView?: GraphView | null
   /** Override the graph verb (e.g. a deferred promise for the loading state). */
   graph?: (limit?: number) => Promise<GraphView | null>
+  /** The dock seat's conversation composer phase (blank = the hero phase). */
+  composerPhase?: 'blank' | 'active'
+  /** The dock seat's conversation open state (open = the hero phase). */
+  openState?: 'open' | 'loading'
+  /** Render into this element instead of the RTL default container. */
+  container?: HTMLElement
 }
 
+/** The seat whose props the bench should compose. */
+type BenchSeat = 'context' | 'dock'
+
 /** Render the branch chip with stub framework hooks and a scripted inject face. */
-function bench(options: BenchOptions = {}) {
+function bench(options: BenchOptions = {}, seat: BenchSeat = 'context') {
   const sessionId = sid('sess-1')
   const cwd = 'cwd' in options ? options.cwd : '/ws/proj'
   const repoStatus = options.repoStatus === undefined
@@ -92,21 +114,40 @@ function bench(options: BenchOptions = {}) {
     subscribeChanges: vi.fn((sessionId: SessionId | undefined, _onChange: () => void) => { record('subscribeChanges', sessionId); return () => {} }),
   }
 
-  const props: BranchChipProps = {
-    sessionId,
-    // The selector-context hole has an empty owner share: the chip derives
-    // its state from the standard session-maybe kit + the inject face, never
-    // from the conversation snapshot or live input state.
+  const sessionsState = {
+    byId: { [sessionId]: { cwd, blank: options.blank === true } },
+  }
+  const commonProps = {
+    // The context/dock holes read their state from the standard session kit +
+    // the inject face; the dock seat additionally carries the conversation
+    // snapshot (and indents the chip to the input card start).
     useSession: (() => undefined) as never,
-    useSessions: ((selector: (state: { byId: Record<string, { cwd?: string; blank?: boolean }> }) => unknown) =>
-      selector({ byId: { [sessionId]: { cwd, blank: options.blank === true } } })) as never,
+    useSessions: ((selector: (state: typeof sessionsState) => unknown) => selector(sessionsState)) as never,
     useWorkspaces: (() => undefined) as never,
     useProjection: (() => undefined) as never,
     t: makeTranslate(),
     ...injected,
+  } as const
+
+  let props: BranchChipProps
+  if (seat === 'dock') {
+    props = {
+      ...commonProps,
+      sessionId,
+      session: {
+        composerPhase: options.composerPhase ?? 'active',
+        openState: options.openState ?? 'open',
+      } as never,
+      input: {} as never,
+    }
+  } else {
+    props = {
+      ...commonProps,
+      sessionId,
+    }
   }
 
-  const view = render(<BranchChip {...props} />)
+  const view = render(<BranchChip {...props} />, options.container !== undefined ? { container: options.container } : undefined)
   return { view, injected, calls, props }
 }
 
@@ -121,6 +162,119 @@ describe('BranchChip', () => {
     bench({ blank: true })
     const branchChip = await screen.findByRole('button', { name: '分支' })
     expect(branchChip.textContent).toContain('main')
+  })
+
+  it('shows the chip on the dock seat above the composer card', async () => {
+    bench({}, 'dock')
+    const branchChip = await screen.findByRole('button', { name: '分支' })
+    expect(branchChip.textContent).toContain('main')
+  })
+
+  it('indents the dock copy so it starts flush with the input card', async () => {
+    bench({}, 'dock')
+    const branchChip = await screen.findByRole('button', { name: '分支' })
+    // The dock row spans the composer stack; only the dock seat carries the
+    // side-clearance indent that aligns the chip with the input card below.
+    // The chip's parent is the positioning wrapper; the outer anchor owns
+    // the indent padding.
+    const chipWrap = branchChip.parentElement as HTMLElement
+    expect(chipWrap.className).toContain('chipWrap')
+    expect(chipWrap.contains(branchChip)).toBe(true)
+    const anchor = anchorOf(branchChip)
+    expect(anchor.className).toContain('anchorDock')
+  })
+
+  it('measures the input card left edge and applies it as the dock indent', async () => {
+    const card = document.createElement('div')
+    card.setAttribute('data-composer-card', '')
+    document.body.append(card)
+    try {
+      const { view } = bench({}, 'dock')
+      const chip = await screen.findByRole('button', { name: '分支' })
+      const chipWrap = chip.parentElement as HTMLElement
+      expect(chipWrap.className).toContain('chipWrap')
+      const anchor = anchorOf(chip)
+      anchor.getBoundingClientRect = () => ({
+        left: 540, right: 1344, top: 0, bottom: 24, width: 804, height: 24, x: 540, y: 0, toJSON: () => ({}),
+      }) as DOMRect
+      card.getBoundingClientRect = () => ({
+        left: 600, right: 1380, top: 0, bottom: 100, width: 780, height: 100, x: 600, y: 0, toJSON: () => ({}),
+      }) as DOMRect
+      await act(async () => {
+        window.dispatchEvent(new Event('resize'))
+        await nextFrame()
+      })
+      expect(anchor.style.paddingLeft).toBe('60px')
+      expect(view.unmount).toBeTruthy()
+    } finally {
+      card.remove()
+    }
+  })
+
+  it('keeps the context copy without the dock indent', async () => {
+    bench()
+    const branchChip = await screen.findByRole('button', { name: '分支' })
+    expect(anchorOf(branchChip).className).not.toContain('anchorDock')
+  })
+
+  it('styles the dock chip with the official hero seat in the blank phase', async () => {
+    bench({ composerPhase: 'blank', openState: 'open' }, 'dock')
+    const branchChip = await screen.findByRole('button', { name: '分支' })
+    const chipWrap = branchChip.parentElement as HTMLElement
+    expect(chipWrap.className).toContain('chipWrap')
+    expect(anchorOf(branchChip).className).toContain('anchorHero')
+    expect(branchChip.className).toContain('chipHero')
+    fireEvent.click(branchChip)
+    const popover = await screen.findByRole('listbox', { name: '搜索分支' })
+    expect(popover.className).toContain('popoverHero')
+    // The popover is absolutely positioned against the chip wrapper, so it
+    // stays flush with the chip no matter how the dock anchor is padded.
+    expect(chipWrap.contains(popover)).toBe(true)
+  })
+
+  it('enters the hero seat while a blank session composer is still loading', async () => {
+    bench({ blank: true, composerPhase: 'blank', openState: 'loading' }, 'dock')
+    const branchChip = await screen.findByRole('button', { name: '分支' })
+    const anchor = anchorOf(branchChip)
+    expect(anchor.className).toContain('anchorHero')
+    expect(branchChip.className).toContain('chipHero')
+  })
+
+  it('positions the hero dock chip after the rightmost hero-row chip', async () => {
+    const stack = document.createElement('div')
+    const heroRow = document.createElement('div')
+    heroRow.className = 'heroWorkspaceRow'
+    const preset = document.createElement('span')
+    preset.className = 'presetSeat'
+    heroRow.append(preset)
+    const outlet = document.createElement('div')
+    stack.append(heroRow, outlet)
+    document.body.append(stack)
+    try {
+      bench({ composerPhase: 'blank', openState: 'open', container: outlet }, 'dock')
+      const chip = await screen.findByRole('button', { name: '分支' })
+      const anchor = anchorOf(chip)
+
+      const rect = (left: number, top: number, width: number, height: number): DOMRect => ({
+        left, top, right: left + width, bottom: top + height, width, height, x: left, y: top, toJSON: () => ({}),
+      }) as DOMRect
+      stack.getBoundingClientRect = () => rect(320, 313, 812, 274)
+      heroRow.getBoundingClientRect = () => rect(320, 369, 812, 28)
+      preset.getBoundingClientRect = () => rect(467, 369, 106, 28)
+      anchor.getBoundingClientRect = () => rect(320, 405, 812, 28)
+
+      await act(async () => {
+        window.dispatchEvent(new Event('resize'))
+        await nextFrame()
+      })
+      // Right edge of the preset (573) + the official 2px hero-row gap,
+      // relative to the stack; vertically centered in the 28px row.
+      expect(anchor.style.left).toBe('255px')
+      expect(anchor.style.top).toBe('56px')
+      expect(anchor.style.paddingLeft).toBe('0px')
+    } finally {
+      stack.remove()
+    }
   })
 
   it('hides the branch chip when the workspace is not a git repository', async () => {
@@ -229,5 +383,34 @@ describe('BranchChip', () => {
       hasMore: false,
     })
     expect(await screen.findByText('root commit')).toBeTruthy()
+  })
+
+  it('throttles focus refetches to one per 5s window', async () => {
+    // now starts past the initial lastFocusRefetch (0) so the FIRST focus is
+    // the one consumed by the throttle window (a second burst focus is held).
+    vi.useFakeTimers({ now: 10_000 })
+    try {
+      const { injected } = bench()
+      // Flush the initial mount load so the throttle deltas are relative to it.
+      await act(async () => {})
+      const initialCalls = injected.repoStatus.mock.calls.length
+
+      await act(async () => { window.dispatchEvent(new Event('focus')) })
+      await act(async () => {})
+      expect(injected.repoStatus.mock.calls.length).toBe(initialCalls + 1)
+
+      // A second focus inside the 5s window is throttled: no new call.
+      await act(async () => { window.dispatchEvent(new Event('focus')) })
+      await act(async () => {})
+      expect(injected.repoStatus.mock.calls.length).toBe(initialCalls + 1)
+
+      // The window elapses; the next focus refetches again.
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+      await act(async () => { window.dispatchEvent(new Event('focus')) })
+      await act(async () => {})
+      expect(injected.repoStatus.mock.calls.length).toBe(initialCalls + 2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -259,6 +259,7 @@ class FakeChild extends EventEmitter {
   stdout = new EventEmitter()
   stderr = new EventEmitter()
   killed = false
+  pid = 1000
   constructor(public exit: number | null, public spawnError?: Error) {
     super()
   }
@@ -278,6 +279,19 @@ class FakeChild extends EventEmitter {
 }
 
 describe("runUpdate", () => {
+  /** Dispatch one fake child per spawned command for fallback-chain tests. */
+  function dispatchFake(spawns: Readonly<Record<string, FakeChild>>) {
+    const order: string[] = []
+    const argo: Array<{ command: string; args: unknown }> = []
+    const spawnImpl = ((command: string, args: unknown, _options: unknown) => {
+      order.push(command)
+      argo.push({ command, args })
+      const child = spawns[command]
+      if (child === undefined) throw new Error("unexpected command: " + command)
+      return child
+    }) as never
+    return { spawnImpl, order, argo }
+  }
   it("spawns pnpm update with the packages and resolves on success", async () => {
     let spawned: { command: string; args: string[]; cwd: string } | undefined
     const child = new FakeChild(0)
@@ -302,24 +316,166 @@ describe("runUpdate", () => {
     expect(result.errorCode).toBe("pnpm-failed")
     expect(result.exitCode).toBe(1)
   })
-  it("reports pnpm-missing on ENOENT", async () => {
-    const error = Object.assign(new Error("spawn pnpm ENOENT"), { code: "ENOENT" })
-    const child = new FakeChild(null, error)
-    const spawnImpl = (() => child) as never
+  it("falls back to corepack when pnpm is missing and succeeds", async () => {
+    const pnpmError = Object.assign(new Error("spawn pnpm ENOENT"), { code: "ENOENT" })
+    const pnpm = new FakeChild(null)
+    const corepack = new FakeChild(0)
+    const { spawnImpl, order } = dispatchFake({ pnpm, corepack })
     const promise = runUpdate({ profileDir: "/p", packages: ["a"], spawnImpl })
-    child.fail(error)
+    pnpm.fail(pnpmError)
+    corepack.emitOutput("corepack pnpm 1/2")
+    corepack.run(0)
     const result = await promise
+    expect(order).toEqual(["pnpm", "corepack"])
+    expect(result).toEqual({ ok: true, exitCode: 0, output: "corepack pnpm 1/2" })
+  })
+  it("falls back to npx when pnpm and corepack are missing and succeeds", async () => {
+    const error = Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+    const pnpm = new FakeChild(null)
+    const corepack = new FakeChild(null)
+    const npx = new FakeChild(0)
+    const { spawnImpl, order } = dispatchFake({ pnpm, corepack, npx })
+    const promise = runUpdate({ profileDir: "/p", packages: ["a"], spawnImpl })
+    pnpm.fail(error)
+    corepack.fail(error)
+    npx.emitOutput("npx pnpm ok")
+    npx.run(0)
+    const result = await promise
+    expect(order).toEqual(["pnpm", "corepack", "npx"])
+    expect(result.ok).toBe(true)
+    expect(result.output).toBe("npx pnpm ok")
+  })
+  it("reports pnpm-missing once pnpm, corepack and npx are all ENOENT", async () => {
+    const error = Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+    const pnpm = new FakeChild(null)
+    const corepack = new FakeChild(null)
+    const npx = new FakeChild(null)
+    const { spawnImpl, order } = dispatchFake({ pnpm, corepack, npx })
+    const promise = runUpdate({ profileDir: "/p", packages: ["a"], spawnImpl })
+    pnpm.fail(error)
+    corepack.fail(error)
+    npx.fail(error)
+    const result = await promise
+    expect(order).toEqual(["pnpm", "corepack", "npx"])
     expect(result.ok).toBe(false)
     expect(result.errorCode).toBe("pnpm-missing")
+    expect(result.error).toContain("pnpm")
   })
   it("kills and reports timeout", async () => {
     vi.useFakeTimers()
     const child = new FakeChild(null)
     const spawnImpl = (() => child) as never
-    const promise = runUpdate({ profileDir: "/p", packages: ["a"], spawnImpl, timeoutMs: 1000 })
+    const promise = runUpdate({ profileDir: "/p", packages: ["a"], spawnImpl, platform: "linux", timeoutMs: 1000 })
     vi.advanceTimersByTime(1000)
     const result = await promise
     expect(child.killed).toBe(true)
+    expect(result.ok).toBe(false)
+    expect(result.errorCode).toBe("timeout")
+    vi.useRealTimers()
+  })
+  it("routes .cmd shims through the shell on win32", async () => {
+    const optionsSeen: unknown[] = []
+    const child = new FakeChild(0)
+    const spawnImpl = ((_command: string, _args: unknown[], options: unknown) => {
+      optionsSeen.push(options)
+      return child
+    }) as never
+    const promise = runUpdate({ profileDir: "/p", packages: ["a"], spawnImpl, platform: "win32" })
+    child.run(0)
+    await promise
+    expect(optionsSeen[0]).toMatchObject({ shell: true })
+  })
+  it("keeps POSIX spawns shell-free", async () => {
+    const optionsSeen: unknown[] = []
+    const child = new FakeChild(0)
+    const spawnImpl = ((_command: string, _args: unknown[], options: unknown) => {
+      optionsSeen.push(options)
+      return child
+    }) as never
+    const promise = runUpdate({ profileDir: "/p", packages: ["a"], spawnImpl, platform: "darwin" })
+    child.run(0)
+    await promise
+    expect(optionsSeen[0]).not.toHaveProperty("shell")
+  })
+  it("falls back on win32 when cmd reports the shim missing", async () => {
+    const pnpm = new FakeChild(1)
+    const corepack = new FakeChild(0)
+    const { spawnImpl, order } = dispatchFake({ pnpm, corepack })
+    const promise = runUpdate({ profileDir: "/p", packages: ["a"], spawnImpl, platform: "win32" })
+    pnpm.stderr.emit("data", Buffer.from("'pnpm' is not recognized as an internal or external command, operable program or batch file."))
+    pnpm.run(1)
+    corepack.emitOutput("corepack pnpm ok")
+    corepack.run(0)
+    const result = await promise
+    expect(order).toEqual(["pnpm", "corepack"])
+    expect(result.ok).toBe(true)
+    // Output accumulates across candidates (the cmd "not recognized" stderr
+    // stays in the tail) — the success output must be present.
+    expect(result.output).toContain("corepack pnpm ok")
+  })
+  it("keeps pnpm-failed on win32 for non-missing errors", async () => {
+    const child = new FakeChild(1)
+    const spawnImpl = (() => child) as never
+    const promise = runUpdate({ profileDir: "/p", packages: ["a"], spawnImpl, platform: "win32" })
+    child.stderr.emit("data", Buffer.from("ERR_PNPM_OUTDATED_LOCKFILE Cannot proceed"))
+    child.run(1)
+    const result = await promise
+    expect(result.ok).toBe(false)
+    expect(result.errorCode).toBe("pnpm-failed")
+  })
+  it("does not misclassify a real corepack failure after pnpm missing on win32", async () => {
+    // pnpm's 'not recognized' stderr must not bleed into corepack's own
+    // diagnostic window and turn a real failure into a (wrong) fallback to npx.
+    const pnpm = new FakeChild(1)
+    const corepack = new FakeChild(1)
+    const npx = new FakeChild(0)
+    const { spawnImpl, order } = dispatchFake({ pnpm, corepack, npx })
+    const promise = runUpdate({ profileDir: "/p", packages: ["a"], spawnImpl, platform: "win32" })
+    pnpm.stderr.emit("data", Buffer.from("'pnpm' is not recognized as an internal or external command, operable program or batch file."))
+    pnpm.run(1)
+    corepack.stderr.emit("data", Buffer.from("ERR_PNPM_OUTDATED_LOCKFILE Cannot proceed"))
+    corepack.run(1)
+    const result = await promise
+    expect(order).toEqual(["pnpm", "corepack"])
+    expect(result.ok).toBe(false)
+    expect(result.errorCode).toBe("pnpm-failed")
+  })
+  it("does not advance two candidates when error precedes close", async () => {
+    // error(ENOENT) then close(null) is the same missing-command event twice:
+    // the once/settled guard must only advance the chain one level, then the
+    // next candidate runs to success.
+    const pnpmError = Object.assign(new Error("spawn pnpm ENOENT"), { code: "ENOENT" })
+    const pnpm = new FakeChild(null)
+    const corepack = new FakeChild(0)
+    const { spawnImpl, order } = dispatchFake({ pnpm, corepack })
+    const promise = runUpdate({ profileDir: "/p", packages: ["a"], spawnImpl })
+    pnpm.fail(pnpmError)
+    pnpm.run(null)
+    corepack.emitOutput("corepack pnpm ok")
+    corepack.run(0)
+    const result = await promise
+    expect(order).toEqual(["pnpm", "corepack"])
+    expect(result.ok).toBe(true)
+    expect(result.output).toContain("corepack pnpm ok")
+  })
+  it("kills the process tree on win32 timeout and never respawns the next candidate", async () => {
+    vi.useFakeTimers()
+    const pnpmError = Object.assign(new Error("spawn pnpm ENOENT"), { code: "ENOENT" })
+    const pnpm = new FakeChild(null)
+    const corepack = new FakeChild(null)
+    const taskkill = new FakeChild(0)
+    const { spawnImpl, order, argo } = dispatchFake({ pnpm, corepack, taskkill })
+    corepack.pid = 4242
+    const promise = runUpdate({ profileDir: "/p", packages: ["a"], spawnImpl, platform: "win32", timeoutMs: 1000 })
+    pnpm.fail(pnpmError)
+    vi.advanceTimersByTime(1000)
+    const result = await promise
+    expect(order).toEqual(["pnpm", "corepack", "taskkill"])
+    const killed = argo.find(entry => entry.command === "taskkill")
+    expect(killed?.args).toEqual(["/pid", "4242", "/t", "/f"])
+    // The killed corepack's late close must not spawn a third candidate.
+    corepack.run(null)
+    expect(order).toEqual(["pnpm", "corepack", "taskkill"])
     expect(result.ok).toBe(false)
     expect(result.errorCode).toBe("timeout")
     vi.useRealTimers()

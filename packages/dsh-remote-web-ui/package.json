@@ -1,7 +1,7 @@
 {
   "name": "@linxin666/dsh-remote-web-ui",
   "description": "Mobile remote control for the dsh web GUI: scan-to-pair QR entry beside the settings button, one-time pairing tokens, live device status, and revocable mobile sessions",
-  "version": "0.1.11",
+  "version": "0.1.15",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -39,7 +39,7 @@
     "src",
     "cordis.patch.yml"
   ],
-  "license": "BSD-3-Clause",
+  "license": "Apache-2.0",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -62,16 +62,6 @@
     "zod": "^4.4.3"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-sidebar": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-settings": "^0.1.0-rc.6",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
@@ -104,6 +94,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/zhu1090093659/dsh-web-ui.git"
+    "url": "https://github.com/dd2673/dsh-web-ui.git",
+    "directory": "packages/dsh-remote-web-ui"
+  },
+  "homepage": "https://github.com/dd2673/dsh-web-ui/tree/feat/android-remote-community/packages/dsh-remote-web-ui#readme",
+  "bugs": {
+    "url": "https://github.com/dd2673/dsh-web-ui/issues"
   }
 }

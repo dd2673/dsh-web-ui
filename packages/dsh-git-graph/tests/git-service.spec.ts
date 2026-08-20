@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { GitService, type GitRunResult, type WorkspaceGate } from '../src/host/git-service.ts'
+import { GitService, gitSpawnArgv, type GitRunResult, type WorkspaceGate } from '../src/host/git-service.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -211,5 +211,80 @@ describe('GitService', () => {
     const rejected = await service2.switchBranch(repo, 'feature/x')
     expect(rejected.ok).toBe(false)
     if (!rejected.ok) expect(rejected.error.code).toBe('workspace-unknown')
+  })
+
+  it('detects operation markers with a single rev-parse spawn', async () => {
+    const calls: string[][] = []
+    const countingRunner = {
+      async run(argv: readonly string[], cwd: string): Promise<GitRunResult> {
+        calls.push([...argv])
+        return runner.run(argv, cwd)
+      },
+    }
+    const service = new GitService(countingRunner, allowGate(repo))
+
+    // A clean repo: exactly one --git-path spawn carrying all seven markers.
+    expect(await service.status(repo)).toMatchObject({ operationInProgress: false })
+    const markerCalls = calls.filter((argv) => argv[0] === 'rev-parse' && argv.includes('--git-path'))
+    expect(markerCalls).toHaveLength(1)
+    expect(markerCalls[0]).toEqual([
+      'rev-parse',
+      '--git-path', 'MERGE_HEAD',
+      '--git-path', 'CHERRY_PICK_HEAD',
+      '--git-path', 'REVERT_HEAD',
+      '--git-path', 'BISECT_LOG',
+      '--git-path', 'rebase-merge',
+      '--git-path', 'rebase-apply',
+      '--git-path', 'sequencer',
+    ])
+
+    // A real marker file flips the flag through the same single call.
+    await writeFile(join(repo, '.git', 'MERGE_HEAD'), 'deadbeef\n')
+    expect(await service.status(repo)).toMatchObject({ operationInProgress: true })
+    expect(calls.filter((argv) => argv[0] === 'rev-parse' && argv.includes('--git-path'))).toHaveLength(2)
+  })
+
+  it('falls back to per-marker probes when the combined marker spawn returns non-zero', async () => {
+    // A real operation marker flips the verdict; the combined spawn is made
+    // to fail (exitCode 1 / empty stdout) so the fallback path must carry it.
+    await writeFile(join(repo, '.git', 'MERGE_HEAD'), 'deadbeef\n')
+
+    let combinedCalls = 0
+    let singleMarkerCalls = 0
+    const fallbackRunner = {
+      async run(argv: readonly string[], cwd: string): Promise<GitRunResult> {
+        const isRevParsePath = argv[0] === 'rev-parse' && argv.includes('--git-path')
+        if (isRevParsePath) {
+          const gitPathCount = argv.filter((arg) => arg === '--git-path').length
+          if (gitPathCount > 1) {
+            combinedCalls += 1
+            return { exitCode: 1, stdout: '', stderr: '' }
+          }
+          singleMarkerCalls += 1
+        }
+        return runner.run(argv, cwd)
+      },
+    }
+    const service = new GitService(fallbackRunner, allowGate(repo))
+
+    // One combined spawn fails; the fallback probes every marker with its
+    // own git rev-parse --git-path and MERGE_HEAD turns the verdict on.
+    expect(await service.status(repo)).toMatchObject({ operationInProgress: true })
+    expect(combinedCalls).toBe(1)
+    expect(singleMarkerCalls).toBe(7)
+  })
+})
+
+describe('gitSpawnArgv', () => {
+  it('keeps the plain git binary on POSIX', () => {
+    expect(gitSpawnArgv('linux', ['status', '--porcelain'])).toEqual(['git', 'status', '--porcelain'])
+    expect(gitSpawnArgv('darwin', ['rev-parse', '--show-toplevel'])).toEqual(['git', 'rev-parse', '--show-toplevel'])
+  })
+
+  it('uses git.exe on Windows to bypass .cmd shims', () => {
+    // git for Windows ships git.exe; a .cmd/.bat shim in PATH would be the
+    // spawn resolution that Node cannot launch directly. Naming git.exe
+    // always reaches the native executable.
+    expect(gitSpawnArgv('win32', ['status', '--porcelain'])).toEqual(['git.exe', 'status', '--porcelain'])
   })
 })

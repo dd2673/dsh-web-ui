@@ -59,6 +59,75 @@ export interface PairStateFrame {
   tunnel?: TunnelStatusFrame
 }
 
+export interface RelayTokenStatus {
+  configured: boolean
+  fingerprint?: string
+  updatedAt: number
+  expiresAt?: number
+  expired?: boolean
+  /** Present only in the response that rotated the token. */
+  token?: string
+  /** One-time Android deep link rendered as a QR; absent from status reads. */
+  pairingUri?: string
+  /** Secret-free relay base shown beside the QR. */
+  relayUrl?: string
+  /** Internal desktop identity encoded into the QR. */
+  hostId?: string
+}
+
+/** Secret-free Relay setting exposed only to the loopback desktop panel. */
+export interface RelayConfigStatus {
+  relayUrl: string
+  writable: boolean
+}
+
+async function relayConfigCall(method: 'GET' | 'POST', relayUrl?: string): Promise<RelayConfigStatus> {
+  const response = await fetch('/api/remote-web-ui/relay-config', {
+    method,
+    cache: 'no-store',
+    ...(relayUrl === undefined
+      ? {}
+      : { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ relayUrl }) }),
+  })
+  if (!response.ok) throw new Error(`relay config request failed with ${String(response.status)}`)
+  const body = await response.json() as { ok?: boolean; value?: RelayConfigStatus }
+  if (body.ok !== true || body.value === undefined) throw new Error('invalid relay config response')
+  return body.value
+}
+
+/** Read the Host-backed fallback when the shell omits third-party SettingsScope. */
+export function relayConfigStatus(): Promise<RelayConfigStatus> {
+  return relayConfigCall('GET')
+}
+
+/** Persist only relayUrl through the Host settings provider. */
+export function saveRelayConfig(relayUrl: string): Promise<RelayConfigStatus> {
+  return relayConfigCall('POST', relayUrl)
+}
+
+async function relayTokenCall(path = '', method = 'GET'): Promise<RelayTokenStatus> {
+  const response = await fetch(`/api/remote-web-ui/relay-token${path}`, { method, cache: 'no-store' })
+  if (!response.ok) throw new Error(`relay token request failed with ${String(response.status)}`)
+  const body = await response.json() as { ok?: boolean; value?: RelayTokenStatus }
+  if (body.ok !== true || body.value === undefined) throw new Error('invalid relay token response')
+  return body.value
+}
+
+/** Read secret-free token status from the loopback-only plugin route. */
+export function relayTokenStatus(): Promise<RelayTokenStatus> {
+  return relayTokenCall()
+}
+
+/** Rotate the unique Android bearer; the clear token is returned exactly once. */
+export function rotateRelayToken(): Promise<RelayTokenStatus> {
+  return relayTokenCall('/rotate', 'POST')
+}
+
+/** Revoke the Android bearer locally and on the relay. */
+export function revokeRelayToken(): Promise<RelayTokenStatus> {
+  return relayTokenCall('/revoke', 'POST')
+}
+
 /**
  * Mint a fresh pairing token (one active token at a time — this invalidates
  * any previous link).

@@ -228,6 +228,7 @@ export function WhalePet(props: WhalePetProps): ReactPortal {
   const pos = dragPos ?? { right: display.right, bottom: display.bottom }
   const spriteWidth = Math.round(FRAME_WIDTH * spriteScale)
   const spriteHeight = Math.round(FRAME_HEIGHT * spriteScale)
+  const statusBubble = feedback === null && !hovered ? snapshot?.bubble : undefined
 
   const float = (
     <div
@@ -281,6 +282,11 @@ export function WhalePet(props: WhalePetProps): ReactPortal {
           {feedback.text}
         </div>
       )}
+      {statusBubble !== undefined && (
+        <div className={`${styles.bubble} ${styles.bubbleStatus}`} role="status" aria-live="polite">
+          {statusBubble}
+        </div>
+      )}
       {hovered && dragRef.current === null && (
         <div
           className={styles.panel}
@@ -301,6 +307,11 @@ export function WhalePet(props: WhalePetProps): ReactPortal {
                 autoFocus
                 onChange={(e) => setNameDraft(e.target.value)}
                 onKeyDown={(e) => {
+                  // While an IME composition is active (e.g. selecting a
+                  // Chinese candidate), Enter/Escape keydowns belong to the
+                  // input method: ignore them so candidate selection can
+                  // neither submit the draft nor close the rename box.
+                  if (e.nativeEvent.isComposing) return
                   if (e.key === 'Enter') {
                     const trimmed = nameDraft.trim()
                     if (trimmed !== '') {

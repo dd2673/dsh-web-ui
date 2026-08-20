@@ -309,6 +309,132 @@
   cursor: default;
 }
 
+.tokenCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 16px;
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.tokenTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tokenHint,
+.tokenState,
+.tokenOnce,
+.tokenError {
+  margin: 3px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.tokenHint,
+.tokenState { color: var(--dsw-alias-label-secondary); }
+.tokenOnce { color: var(--dsw-alias-state-warn-primary); }
+.tokenError { color: var(--dsw-alias-state-error-primary); }
+
+.relaySettings {
+  display: grid;
+  gap: 6px;
+}
+
+.relayLabel {
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.relayInputRow {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+}
+
+.relayInput {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  outline: none;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--dsw-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.relayInput::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.relayInput:focus-visible {
+  border-color: var(--dsw-alias-brand-primary);
+  box-shadow: 0 0 0 2px var(--dsw-alias-brand-primary);
+}
+
+.relayInput[aria-invalid='true'] {
+  border-color: var(--dsw-alias-state-error-primary);
+}
+
+.relayInput:disabled {
+  opacity: 0.55;
+}
+
+.relaySave {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-button-elevated-fill);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.relaySave:hover:not(:disabled) {
+  background: var(--dsw-alias-button-floating-hover);
+}
+
+.relaySave:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-2), 0 0 0 4px var(--dsw-alias-brand-primary);
+}
+
+.relaySave:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.tokenValue {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--dsw-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  user-select: all;
+}
+
+.relayQr {
+  display: grid;
+  width: fit-content;
+  margin: 4px auto;
+  padding: 10px;
+  border-radius: 16px;
+  background: #fff;
+}
+
 .banner {
   padding: 16px;
   border: 1px solid var(--dsw-alias-border-l2);

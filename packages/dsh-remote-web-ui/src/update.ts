@@ -383,53 +383,143 @@ export interface UpdateRunDeps {
   spawnImpl?: typeof spawn
   /** Hard timeout; the child is killed on expiry. */
   timeoutMs?: number
+  /** Platform override (defaults to process.platform; test seam). */
+  platform?: NodeJS.Platform
 }
 
 /** Cap on captured pnpm output (keeps error payloads bounded). */
 const OUTPUT_CAP = 16 * 1024
 
 /**
- * Run the update: `pnpm update <packages>` inside the profile directory.
+ * Windows cmd command-not-found stderr. With shell:true a missing shim
+ * exits with code 1 (cmd cannot report ENOENT), so the fallback chain
+ * detects this message instead of the spawn error event.
+ */
+const WIN_CMD_MISSING_RE = /not recognized as an internal or external command/i
+
+/**
+ * Run the update inside the profile directory. Tries pnpm first, falls back
+ * to corepack and then npx when the previous command is missing (ENOENT);
+ * all candidates share one hard timeout and keep accumulating output.
  * @param deps - profile dir, package list, and spawn/timeout seams.
  * @returns the outcome with captured output.
  */
 export function runUpdate(deps: UpdateRunDeps): Promise<UpdateRunResult> {
   return new Promise((resolve) => {
-    const child = (deps.spawnImpl ?? spawn)('pnpm', ['update', ...deps.packages], {
+    const spawnImpl = deps.spawnImpl ?? spawn
+    const packages = deps.packages
+    const platform = deps.platform ?? process.platform
+    // Windows ships pnpm/corepack/npx as .cmd shims; Node's spawn cannot
+    // start .cmd files directly (ENOENT even when installed), so route
+    // them through cmd.exe there. POSIX spawns stay shell-free.
+    const spawnOptions: Record<string, unknown> = {
       cwd: deps.profileDir,
       stdio: ['ignore', 'pipe', 'pipe'],
-    })
+      ...(platform === 'win32' ? { shell: true } : {}),
+    }
+    // Ordered fallback chain: each is tried only when the previous one is
+    // missing on PATH (ENOENT on the spawn error event, never on close).
+    const candidates: ReadonlyArray<{ command: string; args: string[] }> = [
+      { command: 'pnpm', args: ['update', ...packages] },
+      { command: 'corepack', args: ['pnpm', 'update', ...packages] },
+      { command: 'npx', args: ['--yes', 'pnpm', 'update', ...packages] },
+    ]
+    // `output` accumulates across candidates for UI display; `currentOutput`
+    // is reset per candidate and carries only that candidate's own diagnostics
+    // (its tail is subject to OUTPUT_CAP). The win32 missing-command test must
+    // run against `currentOutput` so a previous candidate's 'not recognized'
+    // stderr cannot misclassify a real failure in the next one.
     let output = ''
+    let currentOutput = ''
     const append = (chunk: Buffer): void => {
       output += chunk.toString('utf8')
       if (output.length > OUTPUT_CAP) output = output.slice(output.length - OUTPUT_CAP)
+      currentOutput += chunk.toString('utf8')
+      if (currentOutput.length > OUTPUT_CAP) currentOutput = currentOutput.slice(currentOutput.length - OUTPUT_CAP)
     }
-    child.stdout?.on('data', append)
-    child.stderr?.on('data', append)
+    let currentChild: ReturnType<typeof spawnImpl> | undefined
+    // Terminal guard: once a result is produced the promise is settled and no
+    // further candidate is started (a killed child's late close must not
+    // respawn anything after a timeout resolution).
+    let finished = false
+    const finish = (result: UpdateRunResult): void => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+      resolve(result)
+    }
     const timer = setTimeout(() => {
-      child.kill('SIGTERM')
-      resolve({ ok: false, exitCode: null, output, error: 'update timed out; install process killed', errorCode: 'timeout' })
+      if (finished) return
+      if (platform === 'win32') {
+        // cmd.exe under shell:true only kills the shell wrapper; kill the whole
+        // process tree best-effort so pnpm/npx do not keep running.
+        const pid = (currentChild as { pid?: number } | undefined)?.pid
+        if (pid !== undefined && pid > 0) {
+          try {
+            spawnImpl('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore' })
+          } catch {
+            // Best-effort kill; fall through to the timeout result.
+          }
+        }
+      } else {
+        currentChild?.kill('SIGTERM')
+      }
+      finish({ ok: false, exitCode: null, output, error: 'update timed out; install process killed', errorCode: 'timeout' })
     }, deps.timeoutMs ?? 10 * 60_000)
-    child.on('error', (error: Error) => {
-      clearTimeout(timer)
-      const missing = (error as NodeJS.ErrnoException).code === 'ENOENT'
-      resolve({
-        ok: false,
-        exitCode: null,
-        output,
-        error: missing ? 'pnpm not found on PATH' : error.message,
-        errorCode: missing ? 'pnpm-missing' : undefined,
+    const runCandidate = (index: number): void => {
+      if (finished) return
+      if (index >= candidates.length) {
+        finish({
+          ok: false,
+          exitCode: null,
+          output,
+          error: 'pnpm not found on PATH (tried pnpm, corepack, npx); install pnpm and restart the app',
+          errorCode: 'pnpm-missing',
+        })
+        return
+      }
+      const candidate = candidates[index]
+      currentOutput = ''
+      const child = spawnImpl(candidate.command, candidate.args, spawnOptions)
+      currentChild = child
+      let settled = false
+      const once = (fn: () => void): void => {
+        if (settled) return
+        settled = true
+        fn()
+      }
+      child.stdout?.on('data', append)
+      child.stderr?.on('data', append)
+      child.on('error', (error: Error) => {
+        once(() => {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            // Command missing: try the next candidate in the chain.
+            runCandidate(index + 1)
+          } else {
+            finish({ ok: false, exitCode: null, output, error: error.message, errorCode: undefined })
+          }
+        })
       })
-    })
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      resolve({
-        ok: code === 0,
-        exitCode: code,
-        output,
-        error: code === 0 ? undefined : 'pnpm exited with code ' + String(code),
-        ...(code === 0 ? {} : { errorCode: 'pnpm-failed' as const }),
+      child.on('close', (code: number | null) => {
+        if (settled || finished) return
+        // Windows + shell: a missing command reports exit 1 with
+        // 'not recognized' instead of ENOENT — keep the chain going. Checked
+        // against this candidate's own output so a prior fallback's stderr
+        // cannot misclassify a real failure here.
+        if (platform === 'win32' && code !== 0 && WIN_CMD_MISSING_RE.test(currentOutput)) {
+          runCandidate(index + 1)
+          return
+        }
+        settled = true
+        finish({
+          ok: code === 0,
+          exitCode: code,
+          output,
+          error: code === 0 ? undefined : 'pnpm exited with code ' + String(code),
+          ...(code === 0 ? {} : { errorCode: 'pnpm-failed' as const }),
+        })
       })
-    })
+    }
+    runCandidate(0)
   })
 }

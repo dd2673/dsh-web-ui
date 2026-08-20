@@ -1,75 +1,71 @@
+/* Web UI plugin group card chrome + community plugin index.
+ * The disclosure card chrome mirrors the official ui-settings-plugins
+ * PluginCard (same tokens, radius, typography and states) so the group reads
+ * as a sibling of the built-in Shell / Agent loop / Web search cards. */
+
 .groupCard {
   list-style: none;
   border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-3);
+  border-radius: 12px;
+  transition: border-color 0.16s, background 0.16s;
+}
+
+.groupCard:hover {
+  border-color: var(--dsw-alias-label-dimmed);
+}
+
+.groupCardOpen {
   background: var(--dsw-alias-bg-layer-2);
-  overflow: hidden;
-  transition: border-color 120ms ease, background 120ms ease;
+  border-color: var(--dsw-alias-label-dimmed);
 }
 
 .header {
+  appearance: none;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
   width: 100%;
-  padding: 12px 14px;
+  padding: 14px 16px;
   border: 0;
+  border-radius: 12px;
   background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background 120ms ease;
-}
-
-.header:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.header:active {
-  background: var(--dsw-alias-interactive-bg-hover-solid);
 }
 
 .header:focus-visible {
-  outline: none;
-  /* Clear inset ring (2px, ~1px offset) so it is not clipped by the card's
-     overflow:hidden; token-driven so it follows the active skin and theme. */
-  box-shadow: inset 0 0 0 2px var(--dsw-alias-button-info-fill);
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: -2px;
 }
 
 .headText {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  flex: 1;
+  gap: 4px;
   min-width: 0;
-}
-
-.name,
-.description {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .name {
+  font-size: 15px;
   font-weight: 600;
+  line-height: 1.4;
   color: var(--dsw-alias-label-primary);
 }
 
 .description {
-  color: var(--dsw-alias-label-tertiary);
   font-size: 13px;
-  line-height: 1.35;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
 }
 
-.chevron,
-.chevronOpen {
+.chevron {
   color: var(--dsw-alias-label-tertiary);
-  font-size: 13px;
   flex: none;
-  margin-left: 10px;
-  transition: transform 120ms ease, color 120ms ease;
+  transition: transform 0.16s;
 }
 
 .chevronOpen {
@@ -77,8 +73,9 @@
 }
 
 .body {
-  padding: 2px 12px 12px;
   border-top: 1px solid var(--dsw-alias-border-l2);
+  margin: 0 16px;
+  padding: 12px 0 8px;
 }
 
 .subcards {
@@ -87,10 +84,11 @@
   gap: 10px;
   margin: 0;
   padding: 0;
+  list-style: none;
 }
 
-/* Reduced motion: drop the header/chevron transitions (no gating animation).
-   Token colors and the focus ring stay, so usable states remain visible. */
+/* Reduced motion: drop the header/chevron transitions. Token colors and the
+   focus ring stay, so usable states remain visible. */
 @media (prefers-reduced-motion: reduce) {
   .groupCard,
   .header,
@@ -98,4 +96,102 @@
   .chevronOpen {
     transition: none;
   }
+}
+
+/* Community plugin index entries. */
+.entries {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.entry {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.entryHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.entryName {
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entryAuthor {
+  flex: none;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entryDescription,
+.entryDescriptionEn {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.entryDescriptionEn {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+
+.entryLinks {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.entryLink {
+  color: var(--dsw-alias-link-primary, var(--dsw-alias-button-info-fill));
+  font-size: 13px;
+  text-decoration: underline;
+}
+
+.entryLink:hover {
+  text-decoration: none;
+}
+
+.entryNpm {
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty {
+  margin: 0;
+  padding: 8px 2px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.notice {
+  margin: 10px 2px 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--dsw-alias-label-tertiary);
 }

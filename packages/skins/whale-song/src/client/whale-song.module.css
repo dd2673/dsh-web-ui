@@ -276,6 +276,7 @@ body[data-dsh-whale-song] {
   --dsw-alias-state-warn-tertiary: #f7efdc;
   --dsw-alias-toast-bg: #1a3a7a;
   --dsw-alias-tooltip-bg: #ffffe1;
+  --dsw-alias-tooltip-fg: #0d234e;
   --dsw-specific-bubble-highlight: #c4dbf1;
   --dsw-specific-bubble: #d9e9f5;
   --dsw-specific-input-major: rgba(255, 255, 255, 0.6);
@@ -368,6 +369,7 @@ body[data-dsh-whale-song][data-ds-dark-theme] {
   --dsw-alias-state-warn-tertiary: #6b5420;
   --dsw-alias-toast-bg: #1c3460;
   --dsw-alias-tooltip-bg: #ffffe1;
+  --dsw-alias-tooltip-fg: #0d234e;
   --dsw-specific-bubble-highlight: #213a68;
   --dsw-specific-bubble: #1c3460;
   --dsw-specific-input-major: rgba(18, 36, 76, 0.65);
@@ -473,6 +475,41 @@ body[data-dsh-whale-song] :focus-visible {
 
 body[data-dsh-whale-song][data-ds-dark-theme] :focus-visible {
   outline-color: var(--dsw-alias-state-business-primary);
+}
+
+body[data-dsh-whale-song] [data-pane='sidebar'] {
+  color: var(--dsw-alias-label-primary);
+}
+
+body[data-dsh-whale-song] [role='tooltip'] {
+  background: var(--dsw-alias-tooltip-bg);
+  color: var(--dsw-alias-tooltip-fg);
+}
+
+body[data-dsh-whale-song] [role='dialog'] {
+  color: var(--dsw-alias-label-primary);
+}
+
+body[data-dsh-whale-song] [role='dialog'] [class*='navCell']:not([aria-current='true']) {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Text tabs are labels, not chrome plates. */
+body[data-dsh-whale-song] button[role='tab'],
+body[data-dsh-whale-song] button[role='tab']:hover,
+body[data-dsh-whale-song] button[role='tab']:active,
+body[data-dsh-whale-song] button[role='tab']:disabled,
+body[data-dsh-whale-song] button[role='tab']:hover:not(:disabled),
+body[data-dsh-whale-song] button[role='tab']:active:not(:disabled) {
+  background-image: none;
+  background-color: transparent;
+  box-shadow: none;
+  text-shadow: none;
+  border: 0;
+  color: var(--dsw-alias-label-primary);
+  transform: none;
+  filter: none;
+  opacity: 1;
 }
 
 /* --- aionui 右侧面板适配（dsh-aionui-panel）-------------------------------
@@ -815,4 +852,40 @@ body[data-dsh-whale-song] [data-gitgraph-chip][aria-expanded='true'] {
 body[data-dsh-whale-song][data-ds-dark-theme] div:has(> div > [data-gitgraph-chip]) > button[aria-expanded='true'],
 body[data-dsh-whale-song][data-ds-dark-theme] [data-gitgraph-chip][aria-expanded='true'] {
   background-color: rgba(138, 180, 222, 0.18);
+}
+
+
+/* --- 输入框停靠区磨砂渐隐（composerSeat） ----------------------------------
+   The official composer seat fades the scrolled transcript out under a
+   36px band that ends in var(--dsw-alias-bg-base). This skin keeps
+   --dsw-alias-bg-base translucent so the ocean art shows through the
+   panes; the same token leaks into the seat's fade band, leaving its solid
+   region see-through and letting scrolled messages bleed under the input
+   card. Painting the seat with an opaque plate instead reads as a flat
+   mask over the input row, so the seat keeps its fade band — ending in the
+   same translucent page veil, which makes the band invisible at rest — and
+   hides the scrolled text with a local frost. The frost (the veil gradient
+   plus backdrop-filter) sits on the seat's own ::before, never on the seat
+   element itself: a filter on the seat would become the containing block
+   for the fixed-position descendants rendered inside it (the git-graph
+   popover backdrop and graph dialog), re-anchoring them to the seat box.
+   One token-driven rule covers light and dark. */
+
+body[data-dsh-whale-song] [data-phase='active'] [class*='composerSeat'] {
+  background: transparent !important;
+}
+
+body[data-dsh-whale-song] [data-phase='active'] [class*='composerSeat']::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0px,
+    var(--dsw-alias-bg-base) 36px
+  );
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
 }

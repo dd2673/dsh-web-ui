@@ -1,7 +1,7 @@
 {
   "name": "@linxin666/dsh-client-ui-aionui-panel",
   "description": "DSH web GUI right-panel system: a pixel-faithful re-implementation of AionUi's Explorer + Preview columns (file tree, filename search, git changes, multi-tab preview of 10+ formats) driven by real host-side fs/git services, hot-pluggable via a profile bundle without any dsh source changes",
-  "version": "0.1.11",
+  "version": "0.1.15",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -38,14 +38,6 @@
     "typecheck": "tsc -b --pretty false"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-conversation": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-subprocess": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-workspace": "^0.1.0-rc.6",
     "react": "^18.2.0"
   },
   "devDependencies": {
@@ -76,7 +68,7 @@
     "cordis.patch.yml",
     "README.md"
   ],
-  "license": "BSD-3-Clause",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/zhu1090093659/dsh-web-ui.git"

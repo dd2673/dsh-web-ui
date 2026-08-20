@@ -9,7 +9,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import type { GitError } from '../core/types.ts'
+import {
+  isBranchesView, isGitError, isGraphView, isRepoStatus,
+  type GitError,
+} from '../core/types.ts'
+import { PollGuard } from './poll-guard.ts'
 import type { GitService } from './git-service.ts'
 
 /** Envelope every /git JSON response carries. */
@@ -30,13 +34,79 @@ interface Subscriber {
   res: ServerResponse
 }
 
-/** Poll interval for external git-state changes while subscribers are connected. */
-const POLL_INTERVAL_MS = 2_000
+/**
+ * Poll interval for external git-state changes while subscribers are
+ * connected. Kept deliberately long (30s): each tick spawns several git
+ * processes per subscriber, and on Windows a cold git.exe costs ~0.7s per
+ * spawn — a short interval turns the poll itself into a self-exciting
+ * storm. Window focus and the client's own refresh calls cover the
+ * interactive freshness path.
+ */
+const POLL_INTERVAL_MS = 30_000
 /** SSE keep-alive comment interval (proxies drop idle connections). */
 const HEARTBEAT_INTERVAL_MS = 15_000
 
+/**
+ * Route-layer deadline for one subscribed status poll. The subprocess graceMs
+ * is a teardown grace, not an execution timeout, so a hung git child would
+ * otherwise leave the overlap guard stuck forever (polling stays true and no
+ * later tick fires). This deadline is owned by the poll loop: on expiry the
+ * subscriber is treated as failed for this tick, Promise.all still settles,
+ * the finally resets the guard, and the next tick retries.
+ */
+const STATUS_TIMEOUT_MS = 15_000
+
+/**
+ * PollGuard lifetime bound. The SSE loop must live exactly as long as the
+ * subscriber set (start on first join, stop on empty), so there is no natural
+ * server-side expiry: the deadline is set to a sentinel that never fires and
+ * the loop is terminated by {@link PollGuard.stop} when the last subscriber
+ * closes. The per-subscriber 15s {@link STATUS_TIMEOUT_MS} deadline is a run
+ * bound, unrelated to this loop-lifetime value.
+ */
+const POLL_LIFETIME_MS = Number.MAX_SAFE_INTEGER
+
+/** Git operation error for a structurally invalid service view (never a workspace fault). */
+const MALFORMED_VIEW: GitError = { code: 'internal', message: 'malformed git response' }
+
 /** Request body size cap; larger bodies are destroyed rather than drained. */
 const BODY_CAP_BYTES = 1 << 20
+
+/**
+ * Loopback trust fence — the same judgment dsh-ssh applies to its host
+ * routes: a loopback socket address AND a loopback Host header, plus browser
+ * same-origin markers. The /git operations mutate the real repository, so a
+ * LAN-exposed dsh web must not serve them to unpaired devices. The socket
+ * address is authoritative; X-Forwarded-For is never trusted (matching
+ * dsh-ssh).
+ */
+function isLoopbackRequest(request: IncomingMessage): boolean {
+  const address = request.socket.remoteAddress
+  if (address !== '127.0.0.1' && address !== '::1' && address !== '::ffff:127.0.0.1') return false
+  const host = request.headers.host
+  if (typeof host !== 'string') return false
+  let hostUrl: URL
+  try {
+    hostUrl = new URL(`http://${host}`)
+  } catch {
+    return false
+  }
+  if (hostUrl.hostname !== '127.0.0.1' && hostUrl.hostname !== 'localhost' && hostUrl.hostname !== '[::1]') return false
+  if (request.headers['sec-fetch-site'] === 'cross-site') return false
+  const origin = request.headers.origin
+  if (origin === undefined) return true
+  try {
+    return new URL(origin).host === hostUrl.host
+  } catch {
+    return false
+  }
+}
+
+/** Write the shared non-loopback rejection (same body as dsh-ssh). */
+function forbidden(res: ServerResponse): void {
+  res.writeHead(403, { 'content-type': 'application/json; charset=utf-8' })
+  res.end(JSON.stringify({ error: 'forbidden: loopback-only' }))
+}
 
 /** Read a JSON request body into an unknown value; null when unparseable. */
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -77,6 +147,22 @@ function json(res: ServerResponse, envelope: GitEnvelope<unknown>, status = 200)
 }
 
 /**
+ * Send a service view under the ok envelope, rejecting structurally invalid
+ * values (a malformed RepoStatus / BranchesView / GraphView would otherwise
+ * leak to the browser as a typed-but-wrong payload).
+ * @param res - the server response.
+ * @param value - the view the service produced.
+ * @param guard - the runtime narrowing for the view.
+ */
+function okView(res: ServerResponse, value: unknown, guard: (view: unknown) => boolean): void {
+  if (value !== null && !guard(value)) {
+    json(res, FAIL(MALFORMED_VIEW))
+    return
+  }
+  json(res, OK(value))
+}
+
+/**
  * Register the /git routes (prefix for the JSON operations, exact for the
  * SSE stream — longest-prefix-wins keeps them disjoint).
  * @param ctx - context carrying the webServer service.
@@ -85,27 +171,47 @@ function json(res: ServerResponse, envelope: GitEnvelope<unknown>, status = 200)
  */
 export function registerGitRoutes(ctx: Context, service: GitService): () => void {
   const subscribers = new Set<Subscriber>()
-  let pollTimer: NodeJS.Timeout | undefined
+  // The poll loop's lifetime is bound to the subscriber set: created/started
+  // when the first subscriber joins, stopped when the last one closes.
+  let guard: PollGuard | undefined
   let heartbeatTimer: NodeJS.Timeout | undefined
 
   const push = (subscriber: Subscriber, payload: unknown): void => {
     subscriber.res.write(`event: change\ndata: ${JSON.stringify(payload)}\n\n`)
   }
 
-  const poll = (): void => {
-    for (const subscriber of subscribers) {
-      void service.status(subscriber.path).then((status) => {
+  // One PollGuard owns the whole poll lifecycle: at most one status round
+  // runs at a time (a tick arriving mid-run is dropped), consecutive failures
+  // back off up to the base interval (cadence stays exactly 30s), and the
+  // loop stops when the last subscriber closes. The per-subscriber 15s
+  // STATUS_TIMEOUT_MS race below bounds one round so a hung git child cannot
+  // wedge the loop forever.
+  const runPoll = async (): Promise<void> => {
+    await Promise.all([...subscribers].map(async (subscriber) => {
+      try {
+        const status = await Promise.race([
+          service.status(subscriber.path),
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error('git status timed out')), STATUS_TIMEOUT_MS)
+          }),
+        ])
         const key = status === null ? 'no-repo' : `${status.root}|${status.branch}|${status.head}`
         if (key === subscriber.last) return
         subscriber.last = key
         push(subscriber, { path: subscriber.path, status })
-      }).catch((error: unknown) => {
+      } catch (error: unknown) {
         ctx.logger.warn(`dsh-git-graph: status poll failed for ${subscriber.path}: ${String(error)}`)
-      })
-    }
+      }
+    }))
   }
 
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    // Loopback fence first: never let a LAN client reach any /git operation,
+    // regardless of method or content-type.
+    if (!isLoopbackRequest(req)) {
+      forbidden(res)
+      return
+    }
     if (req.method !== 'POST') {
       res.writeHead(405)
       res.end()
@@ -130,17 +236,17 @@ export function registerGitRoutes(ctx: Context, service: GitService): () => void
     }
     switch (pathname) {
       case '/git/status':
-        json(res, OK(await service.status(path)))
+        okView(res, await service.status(path), isRepoStatus)
         return
       case '/git/branches':
-        json(res, OK(await service.branches(path)))
+        okView(res, await service.branches(path), isBranchesView)
         return
       case '/git/graph': {
         const rawLimit = typeof payload === 'object' && payload !== null
           ? (payload as Record<string, unknown>).limit
           : undefined
         const limit = typeof rawLimit === 'number' && rawLimit > 0 && rawLimit <= 1000 ? rawLimit : undefined
-        json(res, OK(await service.graph(path, limit)))
+        okView(res, await service.graph(path, limit), isGraphView)
         return
       }
       case '/git/switch': {
@@ -152,7 +258,7 @@ export function registerGitRoutes(ctx: Context, service: GitService): () => void
           return
         }
         const result = await service.switchBranch(path, branch)
-        json(res, result.ok ? OK({ branch: result.branch }) : FAIL(result.error))
+        json(res, result.ok ? OK({ branch: result.branch }) : FAIL(isGitError(result.error) ? result.error : MALFORMED_VIEW))
         return
       }
       case '/git/create-branch': {
@@ -164,7 +270,7 @@ export function registerGitRoutes(ctx: Context, service: GitService): () => void
           return
         }
         const result = await service.createBranch(path, name)
-        json(res, result.ok ? OK({ branch: result.branch }) : FAIL(result.error))
+        json(res, result.ok ? OK({ branch: result.branch }) : FAIL(isGitError(result.error) ? result.error : MALFORMED_VIEW))
         return
       }
       default:
@@ -174,6 +280,12 @@ export function registerGitRoutes(ctx: Context, service: GitService): () => void
   }
 
   const sse = (req: IncomingMessage, res: ServerResponse): void => {
+    // Reject non-loopback clients before the stream opens: subscribing must
+    // never work for a LAN-exposed deployment.
+    if (!isLoopbackRequest(req)) {
+      forbidden(res)
+      return
+    }
     const url = new URL(req.url ?? '/', 'http://x')
     const path = url.searchParams.get('path')
     if (path === null || path === '') {
@@ -189,9 +301,15 @@ export function registerGitRoutes(ctx: Context, service: GitService): () => void
     res.write('retry: 2000\n\n')
     const subscriber: Subscriber = { path, last: '', res }
     subscribers.add(subscriber)
-    if (pollTimer === undefined) {
-      pollTimer = setInterval(poll, POLL_INTERVAL_MS)
+    if (guard === undefined) {
+      guard = new PollGuard({
+        intervalMs: POLL_INTERVAL_MS,
+        deadlineMs: POLL_LIFETIME_MS,
+        maxBackoffMs: POLL_INTERVAL_MS,
+        onRun: runPoll,
+      })
     }
+    guard.start()
     if (heartbeatTimer === undefined) {
       heartbeatTimer = setInterval(() => {
         for (const current of subscribers) current.res.write(': ping\n\n')
@@ -200,9 +318,9 @@ export function registerGitRoutes(ctx: Context, service: GitService): () => void
     req.on('close', () => {
       subscribers.delete(subscriber)
       if (subscribers.size === 0) {
-        if (pollTimer !== undefined) clearInterval(pollTimer)
+        guard?.stop()
+        guard = undefined
         if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer)
-        pollTimer = undefined
         heartbeatTimer = undefined
       }
     })
@@ -214,7 +332,7 @@ export function registerGitRoutes(ctx: Context, service: GitService): () => void
   ]
   return () => {
     for (const dispose of disposers) dispose()
-    if (pollTimer !== undefined) clearInterval(pollTimer)
+    guard?.stop()
     if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer)
     for (const subscriber of subscribers) subscriber.res.end()
     subscribers.clear()

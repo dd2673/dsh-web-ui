@@ -1,5 +1,7 @@
 # DSH Remote Web UI
 
+
+English | [中文](README.zh.md)
 > 移动端远程控制 + 一键远程更新：扫码配对后用手机远程使用当前 dsh web 工作区；
 > 点击侧边栏更新按钮自动检查并更新 dsh-web-ui 全家桶。
 
@@ -13,6 +15,34 @@ the pairing panel with a QR code, live device status, and stop/refresh/copy
 actions, and the update panel that probes and runs the update.
 
 ## What it does
+
+### Community relay and Android companion
+
+The community-maintained Android companion and optional self-hosted relay are
+third-party integrations, not an official DeepSeek application or hosted
+service. A non-empty `relayUrl` is the user-facing switch for the outbound-only
+WebSocket gateway and can be entered and saved directly in the desktop remote
+panel (`wss://` for Internet services; `ws://` only for loopback development).
+On older Harness shells that do not expose third-party SettingsScope to the
+browser, the same field falls back to a loopback-only plugin route that still
+persists through the Host SettingsProvider; it never edits YAML directly.
+The legacy `relayEnabled` flag remains compatible with older profiles.
+`relayHostId` and the credential named by `relayHostTokenEnv` remain host-only
+deployment settings and are never entered in the panel. The plugin never opens
+a new local port and DSH remains on loopback port 3080. The relay stores only
+bounded metadata and token digests, not conversations, tool output, or
+repository content.
+
+The local plugin is the authority for the Android credential. Its desktop
+panel can generate/rotate a 256-bit token or revoke access. The clear value is
+shown once; local disk and relay persistence contain only SHA-256. Rotation is
+sent over the separately authenticated host channel, immediately disconnects
+the current Android device, and makes its old token unusable. The companion
+stores the clear value with Android Keystore and asks for it only once.
+
+Remote RPC is versioned and allowlisted. The Android companion provides a
+directory picker plus session, chat, queue, and compact-composer controls.
+Git, SSH, and a bundled Windows agent are outside this companion scope.
 
 - **Entry**: a phone icon in the sidebar foot, next to the settings button.
 - **Panel**: "移动端远程控制" title, "扫码或在手机上打开链接，即可远程控制当前工作区"
@@ -37,30 +67,20 @@ actions, and the update panel that probes and runs the update.
   phone icon) opens the update panel, which probes the npm registry for the
   installed `@linxin666/dsh-*` family releases. When a newer release exists
   the panel runs the update automatically (`pnpm update` inside the owning
-  dsh profile; the loopback-only `/api/update/status` + `/api/update/run`
-  endpoints drive it) and asks for a dsh web restart to pick it up. Local
+  dsh profile; when pnpm is missing it falls back to `corepack pnpm` and
+  then `npx --yes pnpm`, and on Windows the command runs through `cmd.exe`
+  so npm-installed `.cmd` shims resolve; the loopback-only
+  `/api/update/status` + `/api/update/run` endpoints drive it) and asks for
+  a dsh web restart to pick it up. Local
   link installs (development mode) are detected and report the npm state
   without updating.
 
 ## Screenshots
 
-The phone surface on a 390pt viewport. Light is the default theme; a
-sun/moon toggle in every header flips to the dark palette at any time.
-
-- **Workspaces** — the roster, each row a workspace with its own sessions:
-  ![Workspaces](docs/screenshots/mobile-workspaces.png)
-- **Sessions** — one workspace's sessions, headed by the 新建会话 button
-  (creates a blank session attached to the workspace and opens it
-  immediately):
-  ![Sessions](docs/screenshots/mobile-sessions.png)
-- **Chat** — messages with the desktop fold discipline (collapsed
-  深度思考 reasoning and 工具 tool-call rows), a pinned composer with
-  模型 / 权限 chips, and a live stream while the agent works:
-  ![Chat](docs/screenshots/mobile-chat.png)
-- **Model picker** — the bottom sheet with a provider-grouped catalog and a
-  思考强度 section per model (the same `session.models` directory the
-  desktop uses):
-  ![Model sheet](docs/screenshots/mobile-model-sheet.png)
+This README does not embed device captures. The `/m` Web UI is a 390pt phone
+surface with a light-first theme, workspaces, sessions, chat, and a model
+picker. Android companion material is documented separately and does not
+describe the `/m` Web UI.
 
 ## Requirements
 
@@ -83,14 +103,11 @@ sun/moon toggle in every header flips to the dark palette at any time.
 
 ## Install
 
-Install the family aggregate package `@linxin666/dsh-web-ui-all` (all plugins and skins in one) or this plugin alone:
+The public npm `0.1.15` package predates this Android companion and relay slice. Use the maintained source branch for this implementation; do not treat the npm package as equivalent yet.
 
 ```sh
-# Recommended: install directly from npm
-dsh plugin --profile web add @linxin666/dsh-remote-web-ui
-
-# Or from the repository (development loop)
-git clone https://github.com/zhu1090093659/dsh-web-ui.git
+# Clone the maintained community branch
+git clone --branch feat/android-remote-community --single-branch https://github.com/dd2673/dsh-web-ui.git
 cd dsh-web-ui
 pnpm install && pnpm -r build
 dsh plugin --profile web add link:$(pwd)/packages/dsh-remote-web-ui
@@ -107,6 +124,8 @@ mounts both halves.
 > `pnpm-workspace.yaml` `allowBuilds` and re-run). Monorepo subpackages
 > use the `link:` form above.
 
+Report Android companion and relay defects in the [maintainer-owned issue tracker](https://github.com/dd2673/dsh-web-ui/issues/1).
+
 ## Use
 
 1. `dsh web --host 0.0.0.0` (the printed LAN URL confirms reachability).
@@ -122,7 +141,9 @@ mounts both halves.
    - opening a session fetches its chat content **on demand** (history
      pages, "加载更早的消息" goes further back),
    - a live stream shows new messages as they arrive, with a prompt box
-     for sending your own,
+     for sending your own (**Enter sends and Shift+Enter inserts a newline
+     by default**; set `mobileEnterToSend: false` to make Enter insert a
+     newline and reserve sending for the 发送 button),
    - a **light-first theme**: the surface ships a light palette by default;
      a sun/moon toggle in every header flips to the dark palette and the
      choice persists across visits (localStorage),
@@ -159,6 +180,13 @@ over Server-Sent Events on `/m/api/events.mux`.
 
 ### Behavior notes
 
+- The mobile composer sends on Enter by default (Shift+Enter inserts a
+  newline). Set `mobileEnterToSend: false` in the plugin settings card (or
+  the profile patch) to make plain Enter insert a newline instead; sending
+  then happens only through the 发送 button. The phone reads the flag
+  through its own `/m/api` preferences method when a chat opens. On
+  browsers that support `field-sizing: content`, the input grows with the
+  draft up to its 120px cap in either mode.
 - Installing this plugin gates non-loopback `/api` access behind pairing
   (see `requirePairingForLan` in `src/index.ts`). A desktop browser opened
   via the LAN URL must pair like any remote device; loopback (127.0.0.1)

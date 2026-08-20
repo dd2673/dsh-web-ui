@@ -6,6 +6,7 @@ import type { Server } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { PairingService } from '../src/pairing.ts'
 import { makeRoutes } from '../src/routes.ts'
+import { makeRelaySettingsRoutes } from '../src/relay-settings-routes.ts'
 
 function makeService(): PairingService {
   const service = new PairingService({
@@ -84,6 +85,43 @@ async function call(
     req.end()
   })
 }
+
+describe('/api/remote-web-ui/relay-config', () => {
+  it('keeps reads and writes loopback-only and rejects insecure public WS', async () => {
+    let relayUrl = 'wss://relay.example.com/relay'
+    const write = async (value: string | undefined) => {
+      relayUrl = value ?? ''
+      return { relayUrl, writable: true }
+    }
+    const routes = makeRelaySettingsRoutes({
+      fence: request => request.headers.host?.startsWith('127.0.0.1:') === true,
+      read: () => ({ relayUrl, writable: true }),
+      write,
+    })
+    const { port, close } = await serve(routes)
+    try {
+      const current = await call(port, 'GET', '/api/remote-web-ui/relay-config')
+      expect(current.body).toEqual({ ok: true, value: { relayUrl, writable: true } })
+
+      const saved = await call(port, 'POST', '/api/remote-web-ui/relay-config', {
+        body: { relayUrl: 'wss://relay-2.example.com/relay' },
+      })
+      expect(saved.status).toBe(200)
+      expect(relayUrl).toBe('wss://relay-2.example.com/relay')
+
+      const insecure = await call(port, 'POST', '/api/remote-web-ui/relay-config', {
+        body: { relayUrl: 'ws://relay.example.com/relay' },
+      })
+      expect(insecure.status).toBe(400)
+      expect(relayUrl).toBe('wss://relay-2.example.com/relay')
+
+      const lan = await call(port, 'GET', '/api/remote-web-ui/relay-config', { host: '192.168.1.5:3080' })
+      expect(lan.status).toBe(403)
+    } finally {
+      await close()
+    }
+  })
+})
 
 describe('/api/pair routes', () => {
   it('runs the full flow: issue (loopback) → accept (LAN) → cookie → reuse refused', async () => {
@@ -239,6 +277,22 @@ describe('/api/pair routes', () => {
     try {
       const status = await call(port, 'GET', '/api/pair/issue', {})
       expect(status.status).toBe(405)
+    } finally {
+      await close()
+    }
+  })
+
+  it('malformed payloads are refused with the existing error shape', async () => {
+    const service = makeService()
+    service.setLanBases([{ address: '192.168.1.5', base: 'http://192.168.1.5:3080' }])
+    const { port, close } = await serve(makeRoutes({ service, lanAddresses: ['192.168.1.5'] }))
+    try {
+      const badIssue = await call(port, 'POST', '/api/pair/issue', { body: { address: 42 } })
+      expect(badIssue.status).toBe(400)
+      expect(badIssue.body).toEqual({ ok: false, code: 'bad-payload' })
+      const badAccept = await call(port, 'POST', '/api/pair/accept', { host: '192.168.1.5:3080', body: { token: 7 } })
+      expect(badAccept.status).toBe(400)
+      expect(badAccept.body).toEqual({ ok: false, code: 'bad-payload' })
     } finally {
       await close()
     }

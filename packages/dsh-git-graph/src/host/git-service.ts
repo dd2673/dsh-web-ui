@@ -14,9 +14,9 @@ import type {} from '@deepseek-ai/dsh-subprocess'
 import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import {
   checkRefFormatArgv, classifySwitchFailure, createBranchArgv, forEachRefArgv,
-  gitPathArgv, graphLogArgv, headBranchArgv, headShortArgv, OPERATION_MARKERS,
-  statusPorcelainArgv, switchArgv, topLevelArgv, unmergedArgv, validateBranchName,
-  verifyRefArgv, worktreeListArgv,
+  gitPathArgv, graphLogArgv, headBranchArgv, headShortArgv, operationMarkersArgv,
+  OPERATION_MARKERS, statusPorcelainArgv, switchArgv, topLevelArgv, unmergedArgv,
+  validateBranchName, verifyRefArgv, worktreeListArgv,
 } from '../core/git-command.ts'
 import {
   parseBranches, parseGraph, parsePorcelain, parseWorktreeBranches,
@@ -37,6 +37,22 @@ export interface GitRunner {
 
 /** Collected-output cap for one git command (branch lists and logs fit comfortably). */
 const OUTPUT_CAP_BYTES = 1 << 20
+
+/**
+ * Build the argv for one git invocation, with the win32 binary variant.
+ * Windows ships git as git.exe (git for Windows); a .cmd/.bat shim in PATH
+ * would otherwise be the resolution target and Node's spawn cannot launch
+ * a .cmd file directly (the dsh-subprocess seam applies no shell). Naming
+ * git.exe bypasses any shim and always hits the native executable. cmd.exe
+ * routing is deliberately NOT used: several git args carry %-format specs
+ * (for-each-ref/log --format) that cmd would expand and corrupt.
+ * @param platform - the process platform (process.platform in production; a test seam).
+ * @param argv - the git subcommand args.
+ * @returns the full spawn argv, starting with the platform git binary.
+ */
+export function gitSpawnArgv(platform: NodeJS.Platform, argv: readonly string[]): readonly string[] {
+  return platform === 'win32' ? ['git.exe', ...argv] : ['git', ...argv]
+}
 
 /** The workspace-membership verdict type. */
 export type WorkspaceVerdict = { ok: true; canonical: string } | { ok: false; error: GitError }
@@ -59,7 +75,7 @@ export function subprocessRunner(ctx: Context): GitRunner {
   return {
     async run(argv, cwd) {
       const spec: SubprocessSpawnSpec = {
-        argv: ['git', ...argv],
+        argv: gitSpawnArgv(process.platform, argv),
         cwd,
         stdio: {
           stdin: 'ignore',
@@ -242,14 +258,29 @@ export class GitService {
 
   /** Whether any git operation marker is present in the repository. */
   private async operationInProgress(root: string): Promise<boolean> {
-    for (const marker of OPERATION_MARKERS) {
-      const resolved = await this.runner.run(gitPathArgv(marker), root)
-      const markerPath = resolved.stdout.trim()
-      // --git-path prints a repo-relative path for in-repo markers (and an
-      // absolute one for worktree/linked stores); resolve covers both.
-      if (markerPath !== '' && existsSync(resolve(root, markerPath))) return true
+    // Preferred path: one spawn for all seven markers (Windows: 7 git.exe
+    // cold starts -> 1). --git-path prints a repo-relative path for in-repo
+    // markers (and an absolute one for worktree/linked stores); resolve
+    // covers both.
+    const resolved = await this.runner.run(operationMarkersArgv(), root)
+    if (resolved.exitCode === 0) {
+      const markerPaths = resolved.stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line !== '')
+      return markerPaths.some((markerPath) => existsSync(resolve(root, markerPath)))
     }
-    return false
+    // Non-zero combined exit: fall back to the per-marker sequential probe
+    // (same as the pre-merge implementation) so a single failed rev-parse
+    // cannot silently hide an in-progress operation. Every marker is probed
+    // and the verdict is true when any path exists; all-missing returns false.
+    let inProgress = false
+    for (const marker of OPERATION_MARKERS) {
+      const single = await this.runner.run(gitPathArgv(marker), root)
+      const markerPath = single.stdout.trim()
+      if (markerPath !== '' && existsSync(resolve(root, markerPath))) inProgress = true
+    }
+    return inProgress
   }
 
   /**

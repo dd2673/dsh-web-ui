@@ -4,9 +4,11 @@
  *
  * An aggregate bundle is a plain carrier package whose cordis.patch.yml is the
  * concatenation of its child plugins' insert rows and whose package.json
- * dependencies pull in every child with "workspace:*". Installing the
- * aggregate = all children in one shot (the official `dsh plugin --profile
- * web add <pkg>` flow only needs the one package).
+ * dependencies pull in every child with "workspace:*". The DSH loader
+ * resolves patch rows from the profile root, so the children are installed as
+ * normal dependencies (pnpm hoists them to the top level in the default
+ * hoisted layout); the README documents the hoist setting for strict-layout
+ * profiles.
  *
  * Usage:
  *   node scripts/aggregate.mjs            # regenerate + write everything
@@ -189,14 +191,14 @@ function renderPatch(blocks) {
   return lines.join('\n') + '\n'
 }
 
-/** Resolve deps entries to their package names (read from each child's package.json). */
-function resolveDeps(pkgDir, manifest, errors) {
+/** Resolve manifest entries to their package names (read from each child's package.json). */
+function resolveEntries(pkgDir, entries, section, errors) {
   const resolved = []
-  for (const entry of manifest.deps) {
+  for (const entry of entries) {
     const depDir = resolvePath(pkgDir, entry)
     const pkgPath = join(depDir, 'package.json')
     if (!existsSync(pkgPath)) {
-      errors.push(`deps target has no package.json: ${join(pkgDir, 'aggregate.yml')} -> ${entry} (${pkgPath})`)
+      errors.push(`${section} target has no package.json: ${join(pkgDir, 'aggregate.yml')} -> ${entry} (${pkgPath})`)
       continue
     }
     let name
@@ -215,7 +217,13 @@ function resolveDeps(pkgDir, manifest, errors) {
   return resolved
 }
 
-/** Rebuild the aggregate package.json with workspace:* dependencies; other fields are preserved. */
+/**
+ * Rebuild the aggregate package.json so every manifest deps entry becomes a
+ * "workspace:*" dependency; other fields are preserved, and any leftover
+ * peerDependencies field is removed. The loader resolves patch rows from the
+ * profile root, and pnpm installs these children as normal dependencies
+ * (hoisting them to the top level in the default layout).
+ */
 function renderPackageJson(pkgPath, resolvedDeps) {
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
   const next = {}
@@ -225,6 +233,7 @@ function renderPackageJson(pkgPath, resolvedDeps) {
   }
   if (Object.keys(next).length) pkg.dependencies = next
   else delete pkg.dependencies
+  delete pkg.peerDependencies
   return JSON.stringify(pkg, null, 2) + '\n'
 }
 
@@ -271,7 +280,7 @@ for (const { pkgDir, ymlPath } of aggregates) {
     console.log(`[aggregate] WARN ${rel}: aggregate.yml has no patchFrom entries (patch would be empty)`)
   }
   const patch = renderPatch(blocks)
-  const resolvedDeps = resolveDeps(pkgDir, manifest, errors)
+  const resolvedDeps = resolveEntries(pkgDir, manifest.deps, 'deps', errors)
   const pkgJson = renderPackageJson(join(pkgDir, 'package.json'), resolvedDeps)
   results.push({ rel, blocks, patch, resolvedDeps, pkgJson })
 }

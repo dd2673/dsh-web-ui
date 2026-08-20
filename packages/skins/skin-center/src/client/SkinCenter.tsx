@@ -8,10 +8,11 @@
  * Copy rides the standard `t` seat; the theme preview control drives the
  * official theme service (persisted, same as the Appearance row).
  */
-import { useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ThemeSnapshot } from '@deepseek-ai/dsh-client-ui-theme/client'
 import { SKIN_CENTER_ENTRIES, type SkinCenterEntry } from './generated/skins.ts'
+import { manifestHasSkin } from './manifest.ts'
 import type { SkinBackgroundHandle } from './background.ts'
 import { activeSkinEntry, TryOnController } from './try-on.ts'
 import css from './skin-center.module.css'
@@ -56,6 +57,13 @@ export function SkinCenter({ t, controller, theme, background }: SkinCenterCompo
   const [tryingOfficial, setTryingOfficial] = useState(false)
   const [applying, setApplying] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Unmount guard for the confirmation poll: once the card is gone, the
+  // pending timers must stop and no reload / setState may fire.
+  const mounted = useRef(false)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
 
   const tryOn = (entry: SkinCenterEntry): void => {
     setError(null)
@@ -103,6 +111,10 @@ export function SkinCenter({ t, controller, theme, background }: SkinCenterCompo
       const expected = target === OFFICIAL ? 'none' : target
       let tries = 0
       const tick = (): void => {
+        if (!mounted.current) {
+          resolve(false)
+          return
+        }
         tries += 1
         void fetch('/api/skin-center/state')
           .then(async response => {
@@ -111,12 +123,48 @@ export function SkinCenter({ t, controller, theme, background }: SkinCenterCompo
               resolve(true)
               return
             }
-            if (tries >= 20) resolve(false)
+            if (tries >= 20 || !mounted.current) resolve(false)
             else window.setTimeout(tick, 250)
           })
           .catch(() => {
-            if (tries >= 20) resolve(false)
+            if (tries >= 20 || !mounted.current) resolve(false)
             else window.setTimeout(tick, 250)
+          })
+      }
+      tick()
+    })
+
+  /**
+   * Poll the served GUI document until the boot manifest actually enables
+   * the target (the config watcher regenerates it asynchronously after the
+   * patch write — reloading earlier boots the page into the previous skin),
+   * or time out.
+   * @param target - skin id, or `official` for the stock look.
+   * @returns whether the manifest caught up within the poll budget.
+   */
+  const manifestReady = (target: string): Promise<boolean> =>
+    new Promise(resolve => {
+      const expected = target === OFFICIAL ? null : target
+      let tries = 0
+      const tick = (): void => {
+        if (!mounted.current) {
+          resolve(false)
+          return
+        }
+        tries += 1
+        void fetch(window.location.href, { cache: 'no-store' })
+          .then(async response => {
+            const html = await response.text().catch(() => null)
+            if (html !== null && manifestHasSkin(html, expected)) {
+              resolve(true)
+              return
+            }
+            if (tries >= 40 || !mounted.current) resolve(false)
+            else window.setTimeout(tick, 500)
+          })
+          .catch(() => {
+            if (tries >= 40 || !mounted.current) resolve(false)
+            else window.setTimeout(tick, 500)
           })
       }
       tick()
@@ -125,7 +173,9 @@ export function SkinCenter({ t, controller, theme, background }: SkinCenterCompo
   /**
    * One-click apply: the host half runs `dsh-skin use <target>` (or
    * `use official`), the config watcher hot-reloads the patch within
-   * seconds, then this page reloads to pick up the new boot graph.
+   * seconds, then this page reloads to pick up the new boot graph. The
+   * reload waits for both the patch (state poll) and the regenerated boot
+   * manifest (manifest poll) so the page never boots into the old skin.
    * @param target - skin id, or `official` for the stock look.
    */
   const applySkin = (target: string): void => {
@@ -144,14 +194,24 @@ export function SkinCenter({ t, controller, theme, background }: SkinCenterCompo
         }
         setApplying(null)
         // Patch written; reload only once the watcher reports the target
-        // active, so the page never boots into the old skin.
+        // active AND the boot manifest caught up, so the page never boots
+        // into the old skin.
         void confirmActive(target).then(confirmed => {
-          if (confirmed) {
-            window.location.reload()
-          } else {
+          if (!mounted.current) return
+          if (!confirmed) {
             const command = target === OFFICIAL ? 'dsh-skin use official' : `dsh-skin use ${target}`
             setError(`${t('appliedUnconfirmed')} — ${command}`)
+            return
           }
+          void manifestReady(target).then(ready => {
+            if (!mounted.current) return
+            if (ready) {
+              window.location.reload()
+            } else {
+              const command = target === OFFICIAL ? 'dsh-skin use official' : `dsh-skin use ${target}`
+              setError(`${t('appliedUnconfirmed')} — ${command}`)
+            }
+          })
         })
       })
       .catch((cause: unknown) => {
@@ -198,7 +258,7 @@ export function SkinCenter({ t, controller, theme, background }: SkinCenterCompo
   )
 
   return (
-    <li className={css.pluginCard}>
+    <li className={open ? `${css.pluginCard} ${css.pluginCardOpen}` : css.pluginCard}>
       <button
         type="button"
         className={css.cardHeader}
@@ -213,7 +273,19 @@ export function SkinCenter({ t, controller, theme, background }: SkinCenterCompo
           </span>
           <span className={css.cardDescription} title={t('cardDescription')}>{t('cardDescription')}</span>
         </span>
-        <span className={open ? css.chevronOpen : css.chevron}>▾</span>
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 14 14"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+          className={open ? `${css.chevron} ${css.chevronOpen}` : css.chevron}
+        >
+          <path
+            d="M11.8486 5.5L11.4238 5.92383L8.69727 8.65137C8.44157 8.90706 8.21562 9.13382 8.01172 9.29785C7.79912 9.46883 7.55595 9.61756 7.25 9.66602C7.08435 9.69222 6.91565 9.69222 6.75 9.66602C6.44405 9.61756 6.20088 9.46883 5.98828 9.29785C5.78438 9.13382 5.55843 8.90706 5.30273 8.65137L2.57617 5.92383L2.15137 5.5L3 4.65137L3.42383 5.07617L6.15137 7.80273C6.42595 8.07732 6.59876 8.24849 6.74023 8.3623C6.87291 8.46904 6.92272 8.47813 6.9375 8.48047C6.97895 8.48703 7.02105 8.48703 7.0625 8.48047C7.07728 8.47813 7.12709 8.46904 7.25977 8.3623C7.40124 8.24849 7.57405 8.07732 7.84863 7.80273L10.5762 5.07617L11 4.65137L11.8486 5.5Z"
+            fill="currentColor"
+          />
+        </svg>
       </button>
 
       {open

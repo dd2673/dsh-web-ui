@@ -7,7 +7,20 @@
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsScope, SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { PluginSettingsCard, ValueField, BooleanField } from './PluginSettingsCard.tsx'
-import { CardForm, booleanField, numberField, textField, type CardActions, type CardShell, type FieldState as CardFieldState } from './settings-form.ts'
+import {
+  CardForm, booleanField, numberField, textField,
+  type CardActions, type CardShell, type FieldSpec, type FieldState as CardFieldState,
+} from './settings-form.ts'
+import { parseRelayUrl } from '../relay-url.ts'
+
+/** Match the Host relay transport fence before a value can be persisted. */
+function relayUrlField(field: string): FieldSpec {
+  return {
+    field,
+    format: value => typeof value === 'string' ? value : '',
+    parse: parseRelayUrl,
+  }
+}
 
 /** The remote-control fields this card edits (the namespace's full schema). */
 export interface RemoteSettings {
@@ -27,6 +40,10 @@ export interface RemoteSettings {
   publicBaseUrl?: string
   /** When on, the plugin runs its own Cloudflare quick tunnel automatically. */
   autoTunnel?: boolean
+  /** Community relay service URL. Host identity and host credential stay internal. */
+  relayUrl?: string
+  /** Mobile composer: plain Enter sends; off means Enter inserts a newline. */
+  mobileEnterToSend?: boolean
 }
 
 /** What the remote-control card renders. */
@@ -47,6 +64,16 @@ export interface RemoteSettingsCardState extends CardShell {
   publicBaseUrl: CardFieldState
   /** Auto public tunnel switch. */
   autoTunnel: CardFieldState
+  /** User-facing relay service URL; blank disables the relay connection. */
+  relayUrl: CardFieldState
+  /** Whether only the Relay URL draft differs from persisted settings. */
+  relayUrlDirty: boolean
+  /** Whether the Relay URL is currently being persisted. */
+  relayUrlSaving: boolean
+  /** Whether the last Relay URL save was rejected. */
+  relayUrlFailed: boolean
+  /** Mobile composer Enter-to-send switch. */
+  mobileEnterToSend: CardFieldState
 }
 
 /** The registration-side face the card's slot entry injects. */
@@ -55,11 +82,14 @@ export interface RemoteSettingsCardFace extends CardActions {
     /** Card snapshot bound by the renderer as useRemoteSettingsCard. */
     remoteSettingsCard: SnapshotStore<RemoteSettingsCardState>
   }
+  /** Save only the Relay URL draft and report whether it landed. */
+  saveRelayUrl: () => Promise<boolean>
 }
 
 /** Bridges the `remote-web-ui` scope onto the card's staged form. */
 export class RemoteSettingsCardController {
   private readonly form: CardForm<RemoteSettings>
+  private readonly relayForm: CardForm<RemoteSettings>
   private readonly store: SnapshotStore<RemoteSettingsCardState>
 
   /** @param scope - the bound settings scope for the `remote-web-ui` namespace. */
@@ -73,13 +103,28 @@ export class RemoteSettingsCardController {
       booleanField('requirePairingForLan'),
       textField('publicBaseUrl'),
       booleanField('autoTunnel'),
+      booleanField('mobileEnterToSend'),
     ])
+    this.relayForm = new CardForm(scope, [relayUrlField('relayUrl')])
     this.store = this.form.bind(() => this.projection())
+    // Relay edits use a separate CardForm so the compact panel can persist
+    // exactly one field while both surfaces still share one draft.
+    this.relayForm.bind(() => {
+      const state = this.projection()
+      this.store.set(state)
+      return state
+    })
   }
 
   private projection(): RemoteSettingsCardState {
+    const shell = this.form.shell()
+    const relayShell = this.relayForm.shell()
     return {
-      ...this.form.shell(),
+      ...shell,
+      dirty: shell.dirty || relayShell.dirty,
+      invalid: shell.invalid || relayShell.invalid,
+      saving: shell.saving || relayShell.saving,
+      failed: shell.failed || relayShell.failed,
       enabled: this.form.field('enabled'),
       tokenTtlMs: this.form.field('tokenTtlMs'),
       offlineAfterMs: this.form.field('offlineAfterMs'),
@@ -88,7 +133,17 @@ export class RemoteSettingsCardController {
       requirePairingForLan: this.form.field('requirePairingForLan'),
       publicBaseUrl: this.form.field('publicBaseUrl'),
       autoTunnel: this.form.field('autoTunnel'),
+      relayUrl: this.relayForm.field('relayUrl'),
+      relayUrlDirty: relayShell.dirty,
+      relayUrlSaving: relayShell.saving,
+      relayUrlFailed: relayShell.failed,
+      mobileEnterToSend: this.form.field('mobileEnterToSend'),
     }
+  }
+
+  private async saveAll(): Promise<void> {
+    await this.relayForm.save()
+    await this.form.save()
   }
 
   /**
@@ -96,7 +151,29 @@ export class RemoteSettingsCardController {
    * @returns the card's snapshot and its form actions.
    */
   inject(): RemoteSettingsCardFace {
-    return { hooks: { remoteSettingsCard: this.store }, ...this.form.actions() }
+    const settings = this.form.actions()
+    const relay = this.relayForm.actions()
+    return {
+      hooks: { remoteSettingsCard: this.store },
+      edit: (field, text) => {
+        if (field === 'relayUrl') relay.edit(field, text)
+        else settings.edit(field, text)
+      },
+      resetField: (field) => {
+        if (field === 'relayUrl') relay.resetField(field)
+        else settings.resetField(field)
+      },
+      save: () => { void this.saveAll() },
+      discard: () => {
+        relay.discard()
+        settings.discard()
+      },
+      saveRelayUrl: async () => {
+        await this.relayForm.save()
+        const state = this.relayForm.shell()
+        return !state.failed && !state.dirty
+      },
+    }
   }
 }
 
@@ -130,6 +207,17 @@ export function RemoteSettingsCard(props: RemoteSettingsCardProps) {
       onSave={props.save}
       onDiscard={props.discard}
     >
+      <ValueField
+        id="settings-remote-relay-url"
+        label={t('settings.relayUrl')}
+        hint={t('settings.relayUrlHint')}
+        placeholder="wss://www.example.com/dsh-relay"
+        {...fieldProps}
+        {...state.relayUrl}
+        invalidLabel={t('settings.invalidRelayUrl')}
+        onEdit={(text) => { props.edit('relayUrl', text) }}
+        onReset={() => { props.resetField('relayUrl') }}
+      />
       <BooleanField
         id="settings-remote-enabled"
         label={t('settings.enabled')}
@@ -214,6 +302,18 @@ export function RemoteSettingsCard(props: RemoteSettingsCardProps) {
         {...state.autoTunnel}
         onEdit={(text) => { props.edit('autoTunnel', text) }}
         onReset={() => { props.resetField('autoTunnel') }}
+      />
+      <BooleanField
+        id="settings-remote-mobile-enter"
+        label={t('settings.mobileEnterToSend')}
+        hint={t('settings.mobileEnterToSendHint')}
+        inheritLabel={t('settings.inherit')}
+        onLabel={t('settings.on')}
+        offLabel={t('settings.off')}
+        {...fieldProps}
+        {...state.mobileEnterToSend}
+        onEdit={(text) => { props.edit('mobileEnterToSend', text) }}
+        onReset={() => { props.resetField('mobileEnterToSend') }}
       />
     </PluginSettingsCard>
   )

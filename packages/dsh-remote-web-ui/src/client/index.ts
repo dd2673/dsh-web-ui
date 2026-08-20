@@ -8,7 +8,7 @@
  */
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ClientContext, SettingsScope, SettingsScopeSpec } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale) and the
 // ui-sidebar SlotMap merge (the 'sidebar.remote' hole).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -68,6 +68,18 @@ export interface SettingsPluginItemOwnerProps {
   children?: never
 }
 
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /**
+     * Optional rc.6 compatibility binder provided by dsh-web-ui-settings;
+     * absent when that group plugin is not installed, so callers fall back to
+     * the official settings scope.
+     */
+    webUiSettings?: { bind<S>(spec: SettingsScopeSpec<S>): SettingsScope<S> }
+  }
+}
+
+
 /** Dictionary namespace owned by this plugin. */
 const NS = 'remote'
 
@@ -88,7 +100,11 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'remote-web-ui: dictionaries')
 
   const t = ctx.locale.bind(NS)
-  const settingsScope = ctx.settingsScope.bind<RemoteSettings>({ namespace: REMOTE_WEB_UI_NS })
+  const binder = ctx.get('webUiSettings') ?? ctx.settingsScope
+  const settingsScope = binder.bind<RemoteSettings>({ namespace: REMOTE_WEB_UI_NS })
+  // One staged controller backs both the compact panel field and the full
+  // plugin settings card, so there is only one draft and persistence path.
+  const remoteSettings = new RemoteSettingsCardController(settingsScope)
   const enabled = (): boolean => {
     const snapshot = settingsScope.getSnapshot()
     return snapshot.status === 'ready'
@@ -105,7 +121,11 @@ export function apply(ctx: ClientContext): void {
     let disposeEntry: (() => void) | undefined
     const syncEntry = (): void => {
       if (enabled() && disposeEntry === undefined) {
-        disposeEntry = ctx.slots.register({ name: 'sidebar.remote', locale: NS }, RemoteEntry)
+        disposeEntry = ctx.slots.register({
+          name: 'sidebar.remote',
+          locale: NS,
+          inject: () => remoteSettings.inject(),
+        }, RemoteEntry)
       } else if (!enabled() && disposeEntry !== undefined) {
         disposeEntry()
         disposeEntry = undefined
@@ -127,7 +147,12 @@ export function apply(ctx: ClientContext): void {
     let disposeEntry: (() => void) | undefined
     const syncEntry = (): void => {
       if (enabled() && disposeEntry === undefined) {
-        disposeEntry = ctx.slots.register({ name: 'sidebar.footer.action', id: 'remote-web-ui', locale: NS }, FooterRemoteEntry)
+        disposeEntry = ctx.slots.register({
+          name: 'sidebar.footer.action',
+          id: 'remote-web-ui',
+          locale: NS,
+          inject: () => remoteSettings.inject(),
+        }, FooterRemoteEntry)
       } else if (!enabled() && disposeEntry !== undefined) {
         disposeEntry()
         disposeEntry = undefined
@@ -143,7 +168,6 @@ export function apply(ctx: ClientContext): void {
 
   // Plugin configuration card: one staged form over the `remote-web-ui`
   // settings namespace, contributed to the Web UI plugin group.
-  const remoteSettings = new RemoteSettingsCardController(settingsScope)
   ctx.slots.inject('web-ui.plugin.item', () => ctx.slots.register({
     name: 'web-ui.plugin.item',
     id: 'remote-web-ui',

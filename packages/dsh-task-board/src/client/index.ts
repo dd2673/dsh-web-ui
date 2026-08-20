@@ -8,7 +8,7 @@
  * shell fails the whole boot when a plugin apply throws, and an external
  * plugin must not take the GUI down.
  */
-import type { ClientContext, SessionId, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ClientContext, SessionId, SettingsScope, SettingsScopeSpec, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale) and its
@@ -20,6 +20,7 @@ import { BoardController } from '../core/controller.ts'
 import { ExecutionService } from '../core/execution.ts'
 import { SchedulerService } from '../core/scheduler.ts'
 import { LocalStorageTaskStore } from '../core/store.ts'
+import { claimTaskboardApply, releaseTaskboardApply } from './apply-guard.ts'
 import { mountBoard } from './board-mount.tsx'
 import { mountSidebarEntry } from './sidebar-entry.ts'
 import { TaskBoardSettingsCard, TaskBoardSettingsCardController, type TaskBoardSettings } from './TaskBoardSettingsCard.tsx'
@@ -54,6 +55,18 @@ export interface SettingsPluginItemOwnerProps {
   children?: never
 }
 
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /**
+     * Optional rc.6 compatibility binder provided by dsh-web-ui-settings;
+     * absent when that group plugin is not installed, so callers fall back to
+     * the official settings scope.
+     */
+    webUiSettings?: { bind<S>(spec: SettingsScopeSpec<S>): SettingsScope<S> }
+  }
+}
+
+
 /** Required services (fiber inject waiting — the runtime must be up first). */
 export const inject = ['slots', 'sessions', 'workspaces', 'connection', 'settingsScope', 'locale', 'remote']
 
@@ -62,11 +75,22 @@ export const inject = ['slots', 'sessions', 'workspaces', 'connection', 'setting
  * @param ctx - client root context (services: sessions, workspaces).
  */
 export function apply(ctx: ClientContext): void {
+  // A duplicated client injection (module factory executed twice in one page
+  // lifetime) would otherwise mount a second sidebar entry and board view.
+  // First application wins; later calls become no-ops (see apply-guard.ts).
+  if (!claimTaskboardApply()) return
+
+  // Release the claim when this fiber unloads (the loader supports plugin
+  // unloads / hot-reloads), so a rebuilt bundle can claim again in the same
+  // page instead of being silently dropped.
+  ctx.effect(() => releaseTaskboardApply, 'task-board: apply claim')
+
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'task-board: dictionaries')
 
   // Plugin configuration card: one staged form over the `task-board` settings
   // namespace, contributed to the Web UI plugin group.
-  const settingsScope = ctx.settingsScope.bind<TaskBoardSettings>({ namespace: TASK_BOARD_NS })
+  const binder = ctx.get('webUiSettings') ?? ctx.settingsScope
+  const settingsScope = binder.bind<TaskBoardSettings>({ namespace: TASK_BOARD_NS })
   const settingsCard = new TaskBoardSettingsCardController(settingsScope)
   ctx.slots.inject('web-ui.plugin.item', () => ctx.slots.register({
     name: 'web-ui.plugin.item',

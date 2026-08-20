@@ -34,7 +34,7 @@ When a project session is open, two panels appear to the right of the chat area 
 - **Preview**: multi-tab preview for markdown, HTML, code, diff, CSV, PDF, Office, images and plain text, with source/preview switching, split-screen editing and saving;
 - **Changes (SCM)**: a real git changes panel with stage / unstage / discard;
 - Panel widths are draggable (double-click a handle to reset), and the collapsed state plus widths persist per project;
-- All eight skins adapt the right panel — switching skins restyles the panels to match the theme.
+- All ten skins adapt the right panel — switching skins restyles the panels to match the theme.
 
 ![Right panel](docs/screenshots/19-right-panel.png)
 
@@ -72,15 +72,19 @@ The "SSH" sidebar entry opens the remote-ops panel. Hosts support key / password
 - **Cluster runs**: one command across many hosts concurrently, filtered by alias / environment / tags;
 - **Agent direct control**: agents share the same host config — just say "check xxx" in chat and the agent runs remote commands for you.
 
+### Image Understanding
+
+Gives text-only models vision: when a conversation mentions an image (local path, http(s) URL, or session attachment), the `describe_image` tool sends it to a configured OpenAI-compatible vision endpoint (Qwen-VL, GLM-4V, GPT-4o, a local Ollama endpoint…) and returns the answer. **Only the returned text enters the conversation — the image itself never enters the session log.** Since text-only models have no image entry in the input box, the plugin adds an image button there: picking a file inserts an attachment reference into your draft, and the model can analyze it via `describe_image`; the tool also accepts a `prompt` argument for precise custom instructions (OCR, UI diagnosis, translation) that beat a generic description. Endpoint, model, key, and the default instruction are configured live under Settings > Plugin config > "Image understanding".
+
 ### Settings Hub
 
-All family plugins' toggles and parameters live under "Settings > Plugin config", and changes apply immediately.
+All family plugins' toggles and parameters live under "Settings > Plugin config", and changes apply immediately; a "Community plugins" card inside the group indexes plugins registered by community contributors and links to their repositories.
 
 ![Plugin config hub](docs/screenshots/02-settings-web-ui-plugins.png)
 
 ## Skins
 
-The skin center ships eight skins, each supporting try-on before applying: preview applies instantly and reverts fully on exit; once you are satisfied, apply it with one click.
+The skin center ships ten skins, each supporting try-on before applying: preview applies instantly and reverts fully on exit; once you are satisfied, apply it with one click.
 
 ![Skin center](docs/screenshots/03-settings-skin-center.png)
 
@@ -89,12 +93,6 @@ The skin center ships eight skins, each supporting try-on before applying: previ
 A faithful recreation of the classic Luna interface: blue gradient window chrome, a green Start button, the Bliss blue-sky desktop, and square corners throughout.
 
 ![Windows XP skin](docs/screenshots/16-skin-xp-light.png)
-
-### Minecraft Voxel
-
-Inspired by the Minecraft main menu: a pixel-art panorama skybox rotates slowly behind the interface, buttons adopt the gray stone slab style, and inputs become wooden sign posts.
-
-![Minecraft skin](docs/screenshots/15-skin-minecraft-light.png)
 
 ### Blue Fantasy
 
@@ -108,14 +106,6 @@ The deep-sea whale-goddess theme: a text-free ambience painting (a blue-haired g
 
 ![Whale Song light](docs/screenshots/24-skin-whale-song-light.png) · ![Whale Song dark](docs/screenshots/25-skin-whale-song-dark.png)
 
-### Trading Terminal
-
-A live-data stock-trading skin: a scrolling ticker tape (A-shares / HK / US / indices / crypto / FX, 红涨绿跌), live quote chips in the title bar, and a status bar with A-share / HK / US trading sessions plus HK/US index cells. With `dsh-fun-ticker` installed the tape follows your watchlist (served through its same-origin proxy); with `dsh-longbridge` installed the index cells render the broker snapshot. With neither plugin installed the skin still works standalone on public feeds (Tencent / Binance / Frankfurter) — and every fetch path fails safe to `--` cells.
-
-![Trading Terminal light](docs/screenshots/26-skin-trading-light.png) · ![Trading Terminal dark](docs/screenshots/27-skin-trading-dark.png)
-
-Three more: QQ2008 Retro (crystal blue with penguin motifs), Tonghuashun Trading (market elements woven into the interface), and Dragon Heir (cinnabar dragon seal theme).
-
 ## Installation
 
 DSH plugins are installed per **profile** with the `dsh plugin` command (`dsh web` runs the `web` profile). The recommended way is the aggregate package `dsh-web-ui-all` — one package with all plugins and skins; install `dsh-skins` instead if you only want the skins.
@@ -125,14 +115,21 @@ DSH plugins are installed per **profile** with the `dsh plugin` command (`dsh we
 The plugins are published to npm (the `@linxin666` scope) — one command installs everything:
 
 ```sh
-dsh plugin --profile web add @linxin666/dsh-web-ui-all@0.1.10
+dsh plugin --profile web add @linxin666/dsh-web-ui-all
 ```
 
 Restart `dsh web` and all plugin entries appear in the sidebar. Skins only? Install `@linxin666/dsh-skins` instead.
 
-> Pinned to the current latest release `0.1.10`. The `0.1.1` build of `dsh-pet` shipped without runtime files (`lib/types/*.js`), and some environments may resolve npm's `latest` from a stale registry cache — pinning the version is the safest install; bump `@0.1.10` to the new version when upgrading.
+> pnpm's strict (isolated) layout only puts the aggregate package at the profile top level, so the 11 child packages referenced by the patch rows (12 insert rows) stay nested and `dsh web` fails with `Cannot find package '@linxin666/dsh-...'`. The children are declared as dependencies of this package; on a strict layout, add `nodeLinker: hoisted` (or the legacy `public-hoist-pattern: ['@linxin666/*']`) to the profile's `pnpm-workspace.yaml` and reinstall.
 
 > First install may stop on `ERR_PNPM_IGNORED_BUILDS` (pnpm blocks dependency build scripts): copy the printed keys (`cloudflared` / `cpu-features` / `ssh2`) into the profile's `pnpm-workspace.yaml` `allowBuilds` list and re-run.
+
+> **pnpm 11 release-age gate**: for about 10 days after a new release, pnpm 11's `minimumReleaseAge` gate can silently resolve to older `@linxin666/*` versions (e.g. `dsh-web-ui-all@0.1.5` with the old skin center). The old skin center writes references to standalone skin packages when a skin is applied, which crashes `dsh web` at boot (`ERR_MODULE_NOT_FOUND ... dsh-client-ui-skin-*`). Exclude every `@linxin666/*` package in the profile's `pnpm-workspace.yaml` before installing or updating:
+>
+> ```yaml
+> minimumReleaseAgeExclude:
+>   - '@linxin666/*'
+> ```
 
 ### Option 2: Install from the GitHub repository (development)
 
@@ -163,6 +160,7 @@ Prefer individual plugins? Install them one by one (published on npm, so use the
 ```sh
 dsh plugin --profile web add @linxin666/dsh-client-ui-task-board   # Task board
 dsh plugin --profile web add @linxin666/dsh-ssh                    # Remote connection (SSH)
+dsh plugin --profile web add @linxin666/dsh-tool-describe-image    # Image understanding tool
 dsh plugin --profile web add @linxin666/dsh-pet                    # Whale-girl pet
 ```
 
@@ -174,10 +172,21 @@ Uninstall: `dsh plugin --profile web remove @linxin666/dsh-web-ui-all`, then res
 
 Technical details live in [docs/plugins.md](docs/plugins.md).
 
+## Community
+
+Join our Discord server to connect with developers and other users:
+
+[Join the dsh-web-ui community on Discord](https://discord.gg/6v4gm9u4S)
+
 ## Sources & Licensing
 
 | Package | Origin | License |
 | --- | --- | --- |
-| dsh-task-board / dsh-git-graph / dsh-aionui-panel / dsh-pet / dsh-remote-web-ui / dsh-live-stats / dsh-web-ui-settings / dsh-skins / dsh-web-ui-all / skins | Authored by zhu1090093659 | BSD-3-Clause (zhu1090093659) |
+| dsh-task-board / dsh-git-graph / dsh-aionui-panel / dsh-pet / dsh-remote-web-ui / dsh-live-stats / dsh-web-ui-settings / dsh-liangshen / dsh-skins / dsh-web-ui-all / skins | Authored by zhu1090093659 | Apache-2.0 (zhu1090093659) |
+| dsh-tool-describe-image | Ported from [whitelonng/dsh-plugin-describe-image](https://github.com/whitelonng/dsh-plugin-describe-image) (deepseek-harness `packages/vision/tool-describe-image`) | Apache-2.0 (zhu1090093659) |
 
 Third-party code merged in must keep its LICENSE and attribution; active third parties with an upstream are forked or referenced as dependencies instead of vendored.
+
+## Star History
+
+[![Star History Chart](https://raw.githubusercontent.com/zhu1090093659/dsh-web-ui/star-history/star-history.svg)](https://www.star-history.com/?repos=zhu1090093659%2Fdsh-web-ui&type=date&legend=top-left)

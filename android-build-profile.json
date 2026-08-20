@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "packageName": "org.dshcommunity.remote",
+  "applicationLabel": "DSH Remote Companion",
+  "mainActivityPackage": "org.dshcommunity.remote",
+  "brandResources": [
+    {
+      "path": "packages/dsh-android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml",
+      "sha256": "EF143DD5C199DDAD82B87CDBA70C4117C3E70862A2A974ECBADDA45D8B1F6B2B"
+    },
+    {
+      "path": "packages/dsh-android/app/src/main/res/drawable/ic_launcher_foreground.xml",
+      "sha256": "1CFCDE79E24666EDA31AFEC76FC14745B0E1EF6E6ADA37243663415F169D7480"
+    },
+    {
+      "path": "packages/dsh-android/app/src/main/res/values/colors.xml",
+      "sha256": "E5E8CBC6ED51A103F84C0A52C25E983D11C065B476887884942176AAB69BF91C"
+    },
+    {
+      "path": "packages/dsh-android/app/src/main/assets/remote-link.svg",
+      "sha256": "3A15DDD0FCF805C51A66CFD024732495329A4D5DD950BD761FD4DFA3A1C3BC97"
+    }
+  ],
+  "debugCertificateSha256": "FD66EB2F40FE58A3366BECC7401D84A39EA831A5FB2282BA23859A8019A99DAA",
+  "versionName": "0.1.15",
+  "versionCode": 18,
+  "artifacts": {
+    "Debug": "dsh-remote-companion-0.1.15-r18-debug.apk",
+    "E2E": "dsh-remote-companion-0.1.15-r18-e2e.apk",
+    "Release": "dsh-remote-companion-0.1.15-r18-release.apk"
+  }
+}

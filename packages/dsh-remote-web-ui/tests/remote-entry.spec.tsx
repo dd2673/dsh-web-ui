@@ -2,17 +2,29 @@
 /** The sidebar entry + panel: issue flow, status stream, and the three actions. */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useSyncExternalStore } from 'react'
 // The npm SDK's client half is a closure-factory bundle for the GUI's
 // __ModuleLoader__ (not importable under vitest); provide the one value
 // member the apply chain needs.
 vi.mock('@deepseek-ai/dsh-client-runtime/client', () => ({
-  createSnapshotStore: (init: unknown) => ({
-    get: () => init,
-    set: () => {},
-    subscribe: () => () => {},
-  }),
+  createSnapshotStore: (init: unknown) => {
+    let value = init
+    const listeners = new Set<() => void>()
+    return {
+      getSnapshot: () => value,
+      set: (next: unknown) => {
+        value = next
+        for (const listener of listeners) listener()
+      },
+      subscribe: (listener: () => void) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+    }
+  },
 }))
 import { RemoteEntry, type RemoteEntryProps } from '../src/client/RemoteEntry.tsx'
+import { RemoteSettingsCardController, type RemoteSettings } from '../src/client/RemoteSettingsCard.tsx'
 import { en, type RemoteKey } from '../src/client/locales.ts'
 
 // English dictionary translate stub with {param} interpolation.
@@ -25,6 +37,79 @@ const t: RemoteEntryProps['t'] = (key, params) => {
 }
 
 const neverHook = (() => { throw new Error('shell must not read this hook') }) as never
+
+/**
+ * Shared settings face for both the settings card and the panel.
+ */
+function relaySettings(initial: RemoteSettings = {}) {
+  let snapshot: {
+    status: 'ready'
+    writable: boolean
+    value: RemoteSettings
+    base: RemoteSettings
+    user: RemoteSettings
+  } = {
+    status: 'ready' as const,
+    writable: true,
+    value: initial,
+    base: {},
+    user: {},
+  }
+  const listeners = new Set<() => void>()
+  const set = vi.fn(async (field: string, value: unknown) => {
+    if (field !== 'relayUrl' || typeof value !== 'string') throw new Error(`unexpected field ${field}`)
+    snapshot = {
+      ...snapshot,
+      value: { ...snapshot.value, relayUrl: value },
+      user: { ...snapshot.user, relayUrl: value },
+    }
+    for (const listener of listeners) listener()
+  })
+  const scope = {
+    getSnapshot: () => snapshot,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    set,
+    unset: vi.fn(async (field: string) => {
+      if (field !== 'relayUrl') throw new Error(`unexpected field ${field}`)
+      const value = { ...snapshot.value }
+      const user = { ...snapshot.user }
+      delete value.relayUrl
+      delete user.relayUrl
+      snapshot = { ...snapshot, value, user }
+      for (const listener of listeners) listener()
+    }),
+  }
+  const face = new RemoteSettingsCardController(scope as never).inject()
+  return {
+    set,
+    face,
+    // This is the normal injected hook shape: both surfaces select from the
+    // controller's one snapshot store rather than owning separate forms.
+    useRemoteSettingsCard: <T,>(selector: (state: ReturnType<typeof face.hooks.remoteSettingsCard.getSnapshot>) => T): T =>
+      useSyncExternalStore(
+        face.hooks.remoteSettingsCard.subscribe,
+        () => selector(face.hooks.remoteSettingsCard.getSnapshot()),
+      ),
+  }
+}
+
+/** Legacy shells can mount the plugin without exposing its settings namespace. */
+function unexposedRelaySettings() {
+  const settings = relaySettings()
+  return {
+    ...settings,
+    useRemoteSettingsCard: <T,>(selector: (state: ReturnType<typeof settings.face.hooks.remoteSettingsCard.getSnapshot>) => T): T =>
+      selector({
+        ...settings.face.hooks.remoteSettingsCard.getSnapshot(),
+        available: true,
+        exposed: false,
+        writable: false,
+      }),
+  }
+}
 
 /** Minimal EventSource stub: instances record messages for manual dispatch. */
 class FakeEventSource {
@@ -44,8 +129,18 @@ class FakeEventSource {
 
 /** fetch stub answering the pair endpoints. */
 function mockFetch(issue: { ok: boolean; status?: number; code?: string; url?: string; token?: string; expiresAt?: number; lanAddresses?: string[] }) {
+  let directRelayUrl = 'wss://relay.example.com/relay'
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
+    if (url === '/api/remote-web-ui/relay-config') {
+      if (init?.method === 'POST') {
+        directRelayUrl = (JSON.parse(String(init.body)) as { relayUrl: string }).relayUrl
+      }
+      return new Response(JSON.stringify({
+        ok: true,
+        value: { relayUrl: directRelayUrl, writable: true },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
     const status = init?.method === 'POST' && url === '/api/pair/issue' && !issue.ok ? (issue.status ?? 409) : 200
     const body = url === '/api/pair/issue' && issue.ok
       ? { ok: true, url: issue.url, token: issue.token, expiresAt: issue.expiresAt, lanAddresses: issue.lanAddresses ?? ['192.168.1.5'] }
@@ -56,19 +151,27 @@ function mockFetch(issue: { ok: boolean; status?: number; code?: string; url?: s
   })
 }
 
-function mount(issue: { ok: boolean; status?: number; code?: string; url?: string; token?: string; expiresAt?: number; lanAddresses?: string[] } = { ok: true, url: 'http://192.168.1.5:3080/?pair=tok-1', token: 'tok-1', expiresAt: Date.now() + 60_000, lanAddresses: ['192.168.1.5'] }) {
+function mount(
+  issue: { ok: boolean; status?: number; code?: string; url?: string; token?: string; expiresAt?: number; lanAddresses?: string[] } = { ok: true, url: 'http://192.168.1.5:3080/?pair=tok-1', token: 'tok-1', expiresAt: Date.now() + 60_000, lanAddresses: ['192.168.1.5'] },
+  settings = relaySettings(),
+) {
   const fetch = mockFetch(issue)
   vi.stubGlobal('fetch', fetch)
   vi.stubGlobal('EventSource', FakeEventSource)
+  const useWorkspaces: RemoteEntryProps['useWorkspaces'] = selector => selector({
+    recentWorkspaceId: 'ws-1',
+  } as never)
   const view = render(
     <RemoteEntry
       wide={true}
       useSessions={neverHook}
-      useWorkspaces={(selector: (s: { recentWorkspaceId: string }) => unknown) => selector({ recentWorkspaceId: 'ws-1' })}
+      useWorkspaces={useWorkspaces}
       t={t}
+      {...settings.face}
+      useRemoteSettingsCard={settings.useRemoteSettingsCard}
     />,
   )
-  return { fetch, view }
+  return { fetch, view, settings }
 }
 
 afterEach(() => {
@@ -183,6 +286,74 @@ describe('RemoteEntry', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('http://192.168.1.5:3080/?pair=tok-1'))
     await waitFor(() => expect(screen.getByText('Copied')).toBeTruthy())
   })
+
+  it('edits and saves the Relay URL from the panel through the shared settings controller', async () => {
+    const { settings } = mount()
+    fireEvent.click(screen.getByRole('button', { name: 'Mobile remote control' }))
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Mobile remote control' })).toBeTruthy())
+
+    const input = screen.getByLabelText('Relay service URL')
+    expect((input as HTMLInputElement).value).toBe('')
+    fireEvent.change(input, { target: { value: 'wss://relay.example.com/dsh-relay' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(settings.set).toHaveBeenCalledWith('relayUrl', 'wss://relay.example.com/dsh-relay'))
+  })
+
+  it('keeps an internet ws Relay URL invalid and does not persist it', async () => {
+    const { settings } = mount()
+    fireEvent.click(screen.getByRole('button', { name: 'Mobile remote control' }))
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Mobile remote control' })).toBeTruthy())
+
+    const input = screen.getByLabelText('Relay service URL')
+    fireEvent.change(input, { target: { value: 'ws://relay.example.com/dsh-relay' } })
+
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(settings.set).not.toHaveBeenCalled()
+  })
+
+  it('saves only relayUrl and does not let another settings draft block Relay actions', async () => {
+    const settings = relaySettings({ relayUrl: 'wss://relay.example.com/relay' })
+    settings.face.edit('maxDevices', '8')
+    const { fetch } = mount(undefined, settings)
+    fireEvent.click(screen.getByRole('button', { name: 'Mobile remote control' }))
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Mobile remote control' })).toBeTruthy())
+
+    const rotate = screen.getByRole('button', { name: 'Generate or rotate connection QR' }) as HTMLButtonElement
+    expect(rotate.disabled).toBe(false)
+    fireEvent.click(rotate)
+    expect(fetch).toHaveBeenCalledWith('/api/remote-web-ui/relay-token/rotate', {
+      method: 'POST',
+      cache: 'no-store',
+    })
+    fireEvent.change(screen.getByLabelText('Relay service URL'), {
+      target: { value: 'wss://relay-2.example.com/relay' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(settings.set).toHaveBeenCalledWith('relayUrl', 'wss://relay-2.example.com/relay'))
+    expect(settings.set).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses the loopback Host fallback when a legacy shell does not expose SettingsScope', async () => {
+    const settings = unexposedRelaySettings()
+    const { fetch } = mount(undefined, settings)
+    fireEvent.click(screen.getByRole('button', { name: 'Mobile remote control' }))
+
+    const input = await screen.findByLabelText('Relay service URL')
+    expect((input as HTMLInputElement).value).toBe('wss://relay.example.com/relay')
+    fireEvent.change(input, { target: { value: 'wss://relay-legacy.example.com/relay' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/remote-web-ui/relay-config', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ relayUrl: 'wss://relay-legacy.example.com/relay' }),
+    }))
+    expect(settings.set).not.toHaveBeenCalled()
+  })
 })
 
 describe('apply registration', () => {
@@ -217,7 +388,11 @@ describe('apply registration', () => {
     const { apply } = await import('../src/client/index.ts')
     const injected: string[] = []
     const registered: string[] = []
-    let snapshot = { status: 'loading' as const, writable: false, value: undefined }
+    let snapshot: {
+      status: 'loading' | 'ready'
+      writable: boolean
+      value: { enabled?: boolean } | undefined
+    } = { status: 'loading', writable: false, value: undefined }
     const listeners = new Set<() => void>()
     const notify = (): void => { for (const fn of [...listeners]) fn() }
     const ctx = {

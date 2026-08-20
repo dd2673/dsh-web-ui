@@ -1,9 +1,12 @@
 /**
  * Regression tests for the missing-git-binary degradation (issue: the SSE git
- * poll re-spawned ENOENT every 2 seconds and spammed the terminal forever):
+ * poll re-spawned ENOENT every poll tick and spammed the terminal forever):
  * - The poll probes git availability once and stops polling when the binary
  *   is missing, pushing exactly one gitUnavailable SSE event per connection.
  * - Machines with git installed keep the normal polling behavior.
+ * - A non-repo root keeps the interval running but never spawns git status;
+ *   the route layer keeps asking the canonical repo probe each tick, while
+ *   GitService's TTL cache limits the real rev-parse re-probes.
  * - GitService caches the probe verdict so status() answers null without
  *   spawning anything on a git-less machine.
  */
@@ -21,7 +24,11 @@ interface Connection {
 /** A minimal ctx/webServer/fs/git harness for registerPanelRoutes. */
 function makeEnv(): {
   sse: (req: unknown, res: unknown) => Promise<void>
-  git: { gitAvailable: ReturnType<typeof vi.fn>; status: ReturnType<typeof vi.fn> }
+  git: {
+    gitAvailable: ReturnType<typeof vi.fn>
+    isRepositoryCanonical: ReturnType<typeof vi.fn>
+    statusCanonical: ReturnType<typeof vi.fn>
+  }
   warn: ReturnType<typeof vi.fn>
 } {
   const warn = vi.fn()
@@ -41,7 +48,8 @@ function makeEnv(): {
   }
   const git = {
     gitAvailable: vi.fn(async () => true),
-    status: vi.fn(async () => null),
+    isRepositoryCanonical: vi.fn(async () => true),
+    statusCanonical: vi.fn(async () => null),
   }
   registerPanelRoutes(ctx as never, fs as never, git as never)
   const row = registrations.find((item) => item.kind === 'exact')
@@ -60,6 +68,8 @@ async function connect(sse: (req: unknown, res: unknown) => Promise<void>, root:
   }
   const req = {
     url: '/aionui-panel/events?root=' + encodeURIComponent(root),
+    headers: { host: '127.0.0.1:3000' },
+    socket: { remoteAddress: '127.0.0.1' },
     on: (event: string, handler: () => void) => {
       if (event === 'close') closeHandlers.push(handler)
     },
@@ -87,12 +97,12 @@ describe('SSE git polling with a missing git binary', () => {
     env.git.gitAvailable.mockResolvedValue(false)
     const conn = await connect(env.sse, '/w')
 
-    await vi.advanceTimersByTimeAsync(2_000)
+    await vi.advanceTimersByTimeAsync(30_000)
 
     expect(env.git.gitAvailable).toHaveBeenCalledTimes(1)
     expect(eventsOfKind(conn.writes, 'gitUnavailable')).toBe(1)
     expect(env.warn).toHaveBeenCalledTimes(1)
-    expect(env.git.status).not.toHaveBeenCalled()
+    expect(env.git.statusCanonical).not.toHaveBeenCalled()
 
     // Thirty more ticks: still exactly one event, no status spawns, no logs.
     await vi.advanceTimersByTimeAsync(60_000)
@@ -100,7 +110,7 @@ describe('SSE git polling with a missing git binary', () => {
     expect(eventsOfKind(conn.writes, 'gitUnavailable')).toBe(1)
     expect(env.warn).toHaveBeenCalledTimes(1)
     expect(env.git.gitAvailable).toHaveBeenCalledTimes(1)
-    expect(env.git.status).not.toHaveBeenCalled()
+    expect(env.git.statusCanonical).not.toHaveBeenCalled()
 
     conn.close()
   })
@@ -109,7 +119,7 @@ describe('SSE git polling with a missing git binary', () => {
     const env = makeEnv()
     env.git.gitAvailable.mockResolvedValue(false)
     const first = await connect(env.sse, '/w')
-    await vi.advanceTimersByTimeAsync(2_000)
+    await vi.advanceTimersByTimeAsync(30_000)
     const second = await connect(env.sse, '/w')
 
     expect(eventsOfKind(first.writes, 'gitUnavailable')).toBe(1)
@@ -128,27 +138,75 @@ describe('SSE git polling with git installed', () => {
   it('keeps polling and pushing status changes', async () => {
     const env = makeEnv()
     const status = { root: '/w', branch: 'main', staged: [], unstaged: [], untracked: [] }
-    env.git.status.mockResolvedValue(status)
+    env.git.statusCanonical.mockResolvedValue(status)
     const conn = await connect(env.sse, '/w')
 
-    await vi.advanceTimersByTimeAsync(2_000)
+    await vi.advanceTimersByTimeAsync(30_000)
     expect(env.git.gitAvailable).toHaveBeenCalledTimes(1)
-    expect(env.git.status).toHaveBeenCalledTimes(1)
+    expect(env.git.isRepositoryCanonical).toHaveBeenCalledTimes(1)
+    expect(env.git.statusCanonical).toHaveBeenCalledTimes(1)
     expect(eventsOfKind(conn.writes, 'git')).toBe(1)
 
     // Unchanged status pushes nothing; a branch change pushes again.
-    await vi.advanceTimersByTimeAsync(2_000)
-    expect(env.git.status).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(env.git.isRepositoryCanonical).toHaveBeenCalledTimes(2)
+    expect(env.git.statusCanonical).toHaveBeenCalledTimes(2)
     expect(eventsOfKind(conn.writes, 'git')).toBe(1)
     expect(eventsOfKind(conn.writes, 'gitUnavailable')).toBe(0)
 
-    env.git.status.mockResolvedValue({ ...status, branch: 'dev' })
-    await vi.advanceTimersByTimeAsync(2_000)
-    expect(env.git.status).toHaveBeenCalledTimes(3)
+    env.git.statusCanonical.mockResolvedValue({ ...status, branch: 'dev' })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(env.git.statusCanonical).toHaveBeenCalledTimes(3)
     expect(eventsOfKind(conn.writes, 'git')).toBe(2)
     expect(eventsOfKind(conn.writes, 'gitUnavailable')).toBe(0)
 
     conn.close()
+  })
+})
+
+describe('SSE git polling on a non-repository workspace', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('keeps polling but never spawns git status while the workspace is not a repo', async () => {
+    const env = makeEnv()
+    env.git.isRepositoryCanonical.mockResolvedValue(false)
+    const conn = await connect(env.sse, '/w')
+
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    expect(env.git.gitAvailable).toHaveBeenCalledTimes(1)
+    expect(env.git.isRepositoryCanonical).toHaveBeenCalledTimes(1)
+    expect(env.git.statusCanonical).not.toHaveBeenCalled()
+    expect(eventsOfKind(conn.writes, 'gitUnavailable')).toBe(0)
+
+    // Two more ticks: the interval keeps running so the repo probe is
+    // re-asked every tick (GitService re-runs the real rev-parse only when
+    // its TTL expires), but no git status ever runs.
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(env.git.isRepositoryCanonical).toHaveBeenCalledTimes(3)
+    expect(env.git.statusCanonical).not.toHaveBeenCalled()
+    expect(eventsOfKind(conn.writes, 'gitUnavailable')).toBe(0)
+
+    conn.close()
+  })
+
+  it('polls every connected subscriber while the workspace stays non-repo', async () => {
+    const env = makeEnv()
+    env.git.isRepositoryCanonical.mockResolvedValue(false)
+    const first = await connect(env.sse, '/w')
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    const second = await connect(env.sse, '/w')
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    // One tick for the first subscriber alone, then one tick for both.
+    expect(env.git.isRepositoryCanonical).toHaveBeenCalledTimes(3)
+    expect(env.git.statusCanonical).not.toHaveBeenCalled()
+
+    first.close()
+    second.close()
   })
 })
 

@@ -31,6 +31,11 @@ export interface GitRunner {
 /** Collected-output cap for one git command. */
 const OUTPUT_CAP_BYTES = 1 << 20
 
+/** TTL for a positive repo-top-level verdict. */
+const REPO_CACHE_TTL_MS = 60_000
+/** TTL for a negative (null) repo-top-level verdict. */
+const NO_REPO_CACHE_TTL_MS = 30_000
+
 /** Production runner over `ctx.subprocess`: one managed child per command. */
 export function subprocessRunner(ctx: Context): GitRunner {
   return {
@@ -150,8 +155,10 @@ export function parseStatusView(root: string, branch: string, output: string): G
 const NO_REPO: PanelError = { code: 'git-unavailable', message: 'not a git repository' }
 
 /**
- * Workspace-scoped git operations. Every method passes the gate, resolves the
- * repository root, and rejects non-repositories with a stable error.
+ * Workspace-scoped git operations. Gated methods pass the gate, resolve the
+ * repository root, and reject non-repositories with a stable error; the
+ * `Canonical` variants trust an already-gated canonical root (the SSE poll)
+ * and skip the gate.
  * @param runner - the spawn seam.
  * @param gate - workspace-membership gate.
  * @param fsDelete - delete seam for untracked discard (host: FsService.delete).
@@ -165,6 +172,15 @@ export class GitService {
 
   /** Cached one-shot git binary probe; never re-probes after the first call. */
   private availablePromise: Promise<boolean> | undefined
+
+  /**
+   * Cached repo-top-level resolution per canonical workspace, with a TTL so
+   * running `git init` (positive self-heal) or deleting `.git` (negative
+   * self-heal) is discovered by a later probe. Positive verdicts live 60s,
+   * negative (null) verdicts 30s; exitCode 127 is never cached because it
+   * means spawn/run failed rather than "not a repository".
+   */
+  private readonly repoCache = new Map<string, { value: Promise<string | null>; expiresAt: number }>()
 
   /**
    * Probe the git binary once (git --version) and cache the verdict for the
@@ -183,14 +199,74 @@ export class GitService {
     return this.availablePromise
   }
 
+  /**
+   * Resolve the repo top-level for one canonical root. Verdicts are cached
+   * with a TTL: a positive repo path for 60s, a negative null for 30s. After
+   * expiry the next call re-runs `rev-parse --show-toplevel`, so a repo
+   * created or removed while the host is running is picked up later. An
+   * exitCode 127 means the spawn/run itself failed; it returns null but is
+   * deliberately not cached so the next call retries. Any other failure is
+   * cached as a negative verdict for its TTL.
+   */
+  private repoOf(root: string): Promise<string | null> {
+    const now = Date.now()
+    const cached = this.repoCache.get(root)
+    if (cached !== undefined && cached.expiresAt > now) return cached.value
+    // Infinity while the probe is in flight: concurrent callers share the
+    // same promise, and the real TTL is stamped once the verdict settles.
+    const entry: { value: Promise<string | null>; expiresAt: number } = {
+      value: Promise.resolve(null),
+      expiresAt: Number.POSITIVE_INFINITY,
+    }
+    entry.value = this.run(['rev-parse', '--show-toplevel'], root)
+      .then((result) => {
+        if (result.exitCode === 127) {
+          // Spawn/run failure is not a repo verdict: leave nothing cached.
+          if (this.repoCache.get(root) === entry) this.repoCache.delete(root)
+          return null
+        }
+        if (result.exitCode !== 0) {
+          entry.expiresAt = now + NO_REPO_CACHE_TTL_MS
+          return null
+        }
+        const repo = result.stdout.trim()
+        const found = repo !== '' && isPathInside(repo, root) ? repo : null
+        entry.expiresAt = now + (found === null ? NO_REPO_CACHE_TTL_MS : REPO_CACHE_TTL_MS)
+        return found
+      })
+      .catch(() => {
+        entry.expiresAt = now + NO_REPO_CACHE_TTL_MS
+        return null
+      })
+    this.repoCache.set(root, entry)
+    return entry.value
+  }
+
+  /**
+   * Whether an already-gated canonical root is a git repository. Skips the
+   * workspace gate so the SSE poll does not double-gate every 2s tick; the
+   * underlying repoOf cache keeps rev-parse probes at TTL cadence.
+   */
+  isRepositoryCanonical(canonicalRoot: string): Promise<boolean> {
+    return this.repoOf(canonicalRoot).then((repo) => repo !== null)
+  }
+
+  /**
+   * Whether a workspace root is a git repository. Gates the root first (POST
+   * route entry point); the SSE poll should use `isRepositoryCanonical`.
+   */
+  async isRepository(root: string): Promise<boolean> {
+    const gated = await this.gate(root)
+    if (!gated.ok) return false
+    return await this.isRepositoryCanonical(gated.canonical)
+  }
+
   /** Resolve the gated canonical root and the repository top-level. */
   private async repo(root: string): Promise<{ ok: true; root: string; repo: string } | { ok: false; error: PanelError }> {
     const gated = await this.gate(root)
     if (!gated.ok) return { ok: false, error: gated.error }
-    const result = await this.run(['rev-parse', '--show-toplevel'], gated.canonical)
-    if (result.exitCode !== 0) return { ok: false, error: NO_REPO }
-    const repo = result.stdout.trim()
-    if (repo === '' || !isPathInside(repo, gated.canonical)) return { ok: false, error: NO_REPO }
+    const repo = await this.repoOf(gated.canonical)
+    if (repo === null) return { ok: false, error: NO_REPO }
     return { ok: true, root: gated.canonical, repo }
   }
 
@@ -206,12 +282,28 @@ export class GitService {
     if (!(await this.gitAvailable())) return null
     const repo = await this.repo(root)
     if (!repo.ok) return repo.error.code === 'git-unavailable' ? null : repo.error
+    return this.statusAt(repo.root, repo.repo)
+  }
+
+  /**
+   * The repo status view for an already-gated canonical root; null when it is
+   * not a repository. Skips the workspace gate (SSE subscribers were gated at
+   * connect) and reuses the same repoOf cache + status parsing as `status`.
+   */
+  async statusCanonical(canonicalRoot: string): Promise<GitStatusView | null> {
+    const repo = await this.repoOf(canonicalRoot)
+    if (repo === null) return null
+    return this.statusAt(canonicalRoot, repo)
+  }
+
+  /** Run branch + porcelain status for one resolved repo and parse the view. */
+  private async statusAt(root: string, repo: string): Promise<GitStatusView> {
     const [branchResult, statusResult] = await Promise.all([
-      this.run(['rev-parse', '--abbrev-ref', 'HEAD'], repo.repo),
-      this.run(['status', '--porcelain=v1', '-z', '--untracked-files=all'], repo.repo),
+      this.run(['rev-parse', '--abbrev-ref', 'HEAD'], repo),
+      this.run(['status', '--porcelain=v1', '-z', '--untracked-files=all'], repo),
     ])
     const branch = branchResult.stdout.trim() === 'HEAD' ? '' : branchResult.stdout.trim()
-    return parseStatusView(repo.root, branch, statusResult.stdout)
+    return parseStatusView(root, branch, statusResult.stdout)
   }
 
   /** The repo root for the watch layer (null when not a repository). */

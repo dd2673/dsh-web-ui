@@ -20,6 +20,9 @@ import { makeGateListener } from './gate.ts'
 import { isTrustedApiRequest, makeRoutes } from './routes.ts'
 import { makeMobileRoutes } from './mobile-routes.ts'
 import { makeMobileApiRoutes } from './mobile-api.ts'
+import { RelayGateway } from './relay-gateway.ts'
+import { makeRelayCredentialRoutes, RelayCredentialStore } from './relay-credential.ts'
+import { makeRelaySettingsRoutes } from './relay-settings-routes.ts'
 import { lanIPv4Addresses } from './lan.ts'
 import { TunnelManager, type TunnelInfo } from './tunnel.ts'
 import {
@@ -31,6 +34,7 @@ import {
   type UpdateRunResult,
 } from './update.ts'
 import { makeUpdateRoutes } from './update-routes.ts'
+import { listDriveRoots, searchDirectories } from './host-directory.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Events {
@@ -96,6 +100,21 @@ export interface Config {
    * tunnel setup. The manual `publicBaseUrl` is ignored while this is on.
    */
   autoTunnel?: boolean
+  /** Connect this host to a community relay through the ApiProxy adapter. */
+  relayEnabled?: boolean
+  /** Public WSS relay endpoint. Plain WS is accepted only for loopback development. */
+  relayUrl?: string
+  /** Stable desktop identity configured on the relay server. */
+  relayHostId?: string
+  /** Environment variable containing the host relay token (never stored in settings). */
+  relayHostTokenEnv?: string
+  /**
+   * Mobile composer behavior: when true (default), a plain Enter in the
+   * phone chat textarea sends the prompt and Shift+Enter inserts a newline.
+   * When false, plain Enter inserts a newline and only the send button
+   * sends (Shift+Enter keeps inserting a newline).
+   */
+  mobileEnterToSend?: boolean
   /** Master switch for the plugin (browser half + host pairing surfaces). */
   enabled?: boolean
 }
@@ -108,6 +127,11 @@ export const Config: z<Config> = z.object({
   requirePairingForLan: z.boolean().default(true),
   publicBaseUrl: z.string(),
   autoTunnel: z.boolean().default(false),
+  relayEnabled: z.boolean().default(false),
+  relayUrl: z.string(),
+  relayHostId: z.string().min(3).max(128),
+  relayHostTokenEnv: z.string().min(1).default('DSH_RELAY_HOST_TOKEN'),
+  mobileEnterToSend: z.boolean().default(true),
   enabled: z.boolean().default(true),
 })
 
@@ -119,7 +143,11 @@ const SWEEP_INTERVAL_MS = 10_000
  * which legitimately resolves to `undefined` when unset (the schema keeps it
  * optional, so `Required` alone would over-narrow it to `string`).
  */
-type ResolvedConfig = Required<Omit<Config, 'publicBaseUrl'>> & { publicBaseUrl: string | undefined }
+type ResolvedConfig = Required<Omit<Config, 'publicBaseUrl' | 'relayUrl' | 'relayHostId'>> & {
+  publicBaseUrl: string | undefined
+  relayUrl: string | undefined
+  relayHostId: string | undefined
+}
 
 /** Schema defaults, re-read for hand-built test contexts (the loader applies them normally). */
 const DEFAULTS: ResolvedConfig = {
@@ -130,6 +158,11 @@ const DEFAULTS: ResolvedConfig = {
   requirePairingForLan: true,
   publicBaseUrl: undefined,
   autoTunnel: false,
+  relayEnabled: false,
+  relayUrl: undefined,
+  relayHostId: undefined,
+  relayHostTokenEnv: 'DSH_RELAY_HOST_TOKEN',
+  mobileEnterToSend: true,
   enabled: true,
 }
 
@@ -147,6 +180,11 @@ export function apply(ctx: Context, config?: Config): void {
     requirePairingForLan: config?.requirePairingForLan ?? DEFAULTS.requirePairingForLan,
     publicBaseUrl: config?.publicBaseUrl,
     autoTunnel: config?.autoTunnel ?? DEFAULTS.autoTunnel,
+    relayEnabled: config?.relayEnabled ?? DEFAULTS.relayEnabled,
+    relayUrl: config?.relayUrl,
+    relayHostId: config?.relayHostId,
+    relayHostTokenEnv: config?.relayHostTokenEnv ?? DEFAULTS.relayHostTokenEnv,
+    mobileEnterToSend: config?.mobileEnterToSend ?? DEFAULTS.mobileEnterToSend,
     enabled: config?.enabled ?? DEFAULTS.enabled,
   }
   // The live source the pairing service and the gate read: the settings
@@ -163,6 +201,11 @@ export function apply(ctx: Context, config?: Config): void {
       requirePairingForLan: value.requirePairingForLan ?? DEFAULTS.requirePairingForLan,
       publicBaseUrl: value.publicBaseUrl,
       autoTunnel: value.autoTunnel ?? DEFAULTS.autoTunnel,
+      relayEnabled: value.relayEnabled ?? DEFAULTS.relayEnabled,
+      relayUrl: value.relayUrl,
+      relayHostId: value.relayHostId,
+      relayHostTokenEnv: value.relayHostTokenEnv ?? DEFAULTS.relayHostTokenEnv,
+      mobileEnterToSend: value.mobileEnterToSend ?? DEFAULTS.mobileEnterToSend,
       enabled: value.enabled ?? DEFAULTS.enabled,
     }
   }
@@ -225,6 +268,107 @@ export function apply(ctx: Context, config?: Config): void {
   if (apiProxy === undefined) {
     console.warn('remote-web-ui: apiProxy service unavailable — the mobile data channel is disabled')
   }
+  let relayGateway: RelayGateway | undefined
+  let relayIdentity: { url: string; hostId: string; token: string } | undefined
+  const relayCredential = new RelayCredentialStore()
+  const relayCredentialRoutes = makeRelayCredentialRoutes({
+    store: relayCredential,
+    onChange: async () => {
+      if (relayGateway === undefined) throw new Error('relay gateway unavailable')
+      await relayGateway.syncCredential()
+    },
+    pairingInfo: () => {
+      const value = resolve()
+      return {
+        ...(value.relayUrl === undefined ? {} : { relayUrl: value.relayUrl }),
+        ...(value.relayHostId === undefined ? {} : { hostId: value.relayHostId }),
+      }
+    },
+  })
+  const relaySettingsRoutes = makeRelaySettingsRoutes({
+    fence: request => isTrustedApiRequest(request, []),
+    read: () => {
+      const settings = ctx.get('settings')
+      const registered = settings?.get(REMOTE_WEB_UI_SETTINGS_NAMESPACE) as Config | undefined
+      return {
+        relayUrl: registered?.relayUrl ?? resolve().relayUrl ?? '',
+        writable: settings?.writable === true && registered !== undefined,
+      }
+    },
+    write: async (relayUrl) => {
+      const settings = ctx.get('settings')
+      if (settings === undefined || !settings.writable || settings.get(REMOTE_WEB_UI_SETTINGS_NAMESPACE) === undefined) {
+        throw new Error('settings unavailable')
+      }
+      const operation = relayUrl === undefined
+        ? { op: 'unset' as const, path: ['relayUrl'] }
+        : { op: 'set' as const, path: ['relayUrl'], value: relayUrl }
+      await settings.mutate(REMOTE_WEB_UI_SETTINGS_NAMESPACE, [operation])
+      const registered = settings.get(REMOTE_WEB_UI_SETTINGS_NAMESPACE) as Config | undefined
+      return { relayUrl: registered?.relayUrl ?? '', writable: settings.writable }
+    },
+  })
+  ctx.effect(() => () => {
+    relayGateway?.stop()
+    relayGateway = undefined
+    relayIdentity = undefined
+  }, 'remote-web-ui: relay gateway')
+
+  const syncRelay = (value: ResolvedConfig): void => {
+    // A non-empty Relay URL is the only user-facing switch. relayEnabled is
+    // retained for older profiles but no longer requires a second setting.
+    if (!value.enabled || (value.relayUrl === undefined && !value.relayEnabled) || apiProxy === undefined) {
+      relayGateway?.stop()
+      relayGateway = undefined
+      relayIdentity = undefined
+      return
+    }
+    const token = process.env[value.relayHostTokenEnv]
+    if (value.relayUrl === undefined || value.relayHostId === undefined || token === undefined || token.length < 24) {
+      console.warn(`remote-web-ui: relay disabled — configure relayUrl, relayHostId, and ${value.relayHostTokenEnv}`)
+      relayGateway?.stop()
+      relayGateway = undefined
+      relayIdentity = undefined
+      return
+    }
+    if (relayIdentity?.url === value.relayUrl && relayIdentity.hostId === value.relayHostId && relayIdentity.token === token) return
+    relayGateway?.stop()
+    try {
+      // Directory inspection is the only host-only extension in the initial
+      // companion release. Git and SSH remain outside this review boundary.
+      const extraCapabilities = (): readonly string[] => [
+        'host.listDrives', 'host.searchDirectories',
+      ]
+      const dispatchExtra = async (method: string, payload: unknown, rpcId: string): Promise<unknown> => {
+        const input = typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : {}
+        let result: unknown
+        if (method === 'host.listDrives') {
+          result = { roots: await listDriveRoots() }
+        } else if (method === 'host.searchDirectories') {
+          result = await searchDirectories(requiredText(input.path, 'path'), requiredText(input.query, 'query'))
+        } else {
+          throw new Error(`unhandled remote inspection method ${method}`)
+        }
+        return { type: 'server-response', rpcId, result: { ok: true, value: result } }
+      }
+      relayGateway = new RelayGateway({
+        apiProxy,
+        relayUrl: value.relayUrl,
+        hostId: value.relayHostId,
+        token,
+        extraCapabilities,
+        dispatchExtra,
+        credentialHash: () => relayCredential.tokenHash(),
+        credentialExpiresAt: () => relayCredential.pairingExpiresAt(),
+      })
+      relayIdentity = { url: value.relayUrl, hostId: value.relayHostId, token }
+      relayGateway.start()
+    } catch (error) {
+      relayGateway = undefined
+      relayIdentity = undefined
+      console.warn(`remote-web-ui: relay disabled — ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
   // ── remote update ────────────────────────────────────────────────────────
   // The dsh-web-ui self-update surface: probe the npm registry for family
   // releases and run `pnpm update` in the owning profile. Resolutions anchor
@@ -267,7 +411,11 @@ export function apply(ctx: Context, config?: Config): void {
   const routes = [
     ...makeRoutes({ service, lanAddresses }),
     ...makeMobileRoutes(),
-    ...(apiProxy !== undefined ? makeMobileApiRoutes({ service, apiProxy }) : []),
+    ...(apiProxy !== undefined
+      ? makeMobileApiRoutes({ service, apiProxy, mobileEnterToSend: () => resolve().mobileEnterToSend })
+      : []),
+    ...relayCredentialRoutes,
+    ...relaySettingsRoutes,
     ...updateRoutes,
   ]
   const gate = makeGateListener(service, () => resolve().requirePairingForLan, () => resolve().enabled)
@@ -301,6 +449,7 @@ export function apply(ctx: Context, config?: Config): void {
       }
     }
     const enabled = value.enabled
+    syncRelay(value)
     if (!enabled) service.stop()
     if (disposeRoutes === undefined && enabled) {
       disposeRoutes = ctx.effect(
@@ -346,4 +495,10 @@ function isHttpUrl(value: string): boolean {
   } catch {
     return false
   }
+}
+
+/** Validate one required string from a remote inspection request. */
+function requiredText(value: unknown, name: string): string {
+  if (typeof value !== 'string' || value.trim() === '') throw new Error(`${name} is required`)
+  return value
 }
