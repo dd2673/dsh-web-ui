@@ -1,0 +1,34 @@
+- id: remote-web-ui
+  config:
+    publicBaseUrl: http://127.0.0.1:3088
+    autoTunnel: false
+    relayEnabled: true
+    relayUrl: ws://127.0.0.1:3091
+    relayHostId: compat-fixture
+    relayHostTokenEnv: DSH_COMPAT_HOST_TOKEN
+- id: llm-pi-ai
+  config:
+    providers:
+      compat-fixture:
+        apiKeyEnv: DSH_COMPAT_TEST_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:3090/v1
+        models:
+          - id: fixture
+            name: Compatibility fixture
+            contextWindow: 262144
+            maxTokens: 4096
+
+- id: directory-picker
+  disabled: true
+- insert:
+    - id: directory-picker-remote
+      name: '@deepseek-ai/dsh-host-directory-picker-browse'
+      config:
+        maxEntries: 1000
+    - id: directory-picker-ui-remote
+      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
+- id: agent-default-model
+  config:
+    provider: compat-fixture
+    model: fixture
