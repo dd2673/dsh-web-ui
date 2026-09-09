@@ -52,6 +52,7 @@ async function touchSwipe(selector, fromRatio, toRatio) {
     })
     if (!node) return
     node.dataset.e2eSwipeTarget = 'true'
+    window.__dshSwipeLabel = node.textContent
     node.scrollIntoView({ block: 'center' })
   })()`)
   await new Promise(resolve => setTimeout(resolve, 200))
@@ -207,20 +208,21 @@ await evaluate(`(() => {
   delete window.__dshRosterRefreshHarness
   document.getElementById('refreshTasks').click()
 })()`)
-await waitFor(`!document.getElementById('taskList').textContent.includes('E2E_QUEUED_REFRESH_NEW_SESSION')`)
+// Wait for the real roster response, not the transient loading placeholder.
+await waitFor(`!document.getElementById('taskList').textContent.includes('E2E_QUEUED_REFRESH_NEW_SESSION') && document.querySelectorAll('#taskList .session-swipe').length === ${baseLayout.sessionCount}`)
 
 await touchSwipe('#taskList .session-swipe .row-card', 0.82, 0.34)
-assert.equal(await evaluate(`document.querySelector('[data-e2e-swipe-target]').closest('.session-swipe').classList.contains('open')`), true)
+assert.equal(await evaluate(`(document.querySelector('[data-e2e-swipe-target]') || [...document.querySelectorAll('#taskList .row-card')].find(node => node.textContent === window.__dshSwipeLabel)).closest('.session-swipe').classList.contains('open')`), true)
 assert.equal(await evaluate(`(() => {
-  const wrapper = document.querySelector('[data-e2e-swipe-target]').closest('.session-swipe')
+  const wrapper = (document.querySelector('[data-e2e-swipe-target]') || [...document.querySelectorAll('#taskList .row-card')].find(node => node.textContent === window.__dshSwipeLabel)).closest('.session-swipe')
   const actions = wrapper.querySelector('.session-swipe-actions').getBoundingClientRect()
   const card = wrapper.querySelector('.row-card').getBoundingClientRect()
   return actions.right <= wrapper.getBoundingClientRect().right + 1 && card.right < wrapper.getBoundingClientRect().right
 })()`), true)
 await tap('[data-e2e-swipe-target]')
-assert.equal(await evaluate(`document.querySelector('[data-e2e-swipe-target]').closest('.session-swipe').classList.contains('open')`), false)
+assert.equal(await evaluate(`(document.querySelector('[data-e2e-swipe-target]') || [...document.querySelectorAll('#taskList .row-card')].find(node => node.textContent === window.__dshSwipeLabel)).closest('.session-swipe').classList.contains('open')`), false)
 await touchSwipe('#taskList .session-swipe .row-card', 0.34, 0.82)
-assert.equal(await evaluate(`document.querySelector('[data-e2e-swipe-target]').closest('.session-swipe').classList.contains('open')`), false)
+assert.equal(await evaluate(`(document.querySelector('[data-e2e-swipe-target]') || [...document.querySelectorAll('#taskList .row-card')].find(node => node.textContent === window.__dshSwipeLabel)).closest('.session-swipe').classList.contains('open')`), false)
 
 const sessionsBeforeNew = await evaluate(`document.querySelectorAll('#taskList .session-swipe').length`)
 await evaluate(`document.getElementById('newSession').click()`)
