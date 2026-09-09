@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
 const base = process.env.DSH_COMPAT_BASE ?? 'http://127.0.0.1:3088'
 assert.equal(new URL(base).hostname, '127.0.0.1', 'Only a loopback test Host is permitted')
 const workspace = process.env.DSH_COMPAT_WORKSPACE
@@ -37,8 +37,9 @@ const stream = (async () => {
   const response = await fetch(base + '/m/api/events.mux', { headers: { cookie }, signal: abort.signal })
   assert.equal(response.status, 200)
   let pending = ''
+  const decoder = new TextDecoder()
   for await (const chunk of response.body) {
-    pending += new TextDecoder().decode(chunk)
+    pending += decoder.decode(chunk, { stream: true })
     const events = pending.split('\n\n'); pending = events.pop() ?? ''
     for (const event of events) {
       if (!event.startsWith('data: ')) continue
