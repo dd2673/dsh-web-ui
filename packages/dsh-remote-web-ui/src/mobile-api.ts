@@ -23,7 +23,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
 import type { ClientResponse, RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
-import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
+import type { RpcId as LegacyRpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
+const RpcId = (value: string) => value as LegacyRpcId
 import type { PairingService } from './pairing.ts'
 import { readCookie } from './gate.ts'
 

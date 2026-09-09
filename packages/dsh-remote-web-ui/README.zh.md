@@ -6,6 +6,8 @@
 
 本仓库是 DeepSeek Harness（DSH）的外部插件包：为 dsh web GUI 提供扫码配对式移动端远程控制，外加 dsh-web-ui 全家桶的一键自更新。它是单一双半区包——host 半区持有配对令牌、设备会话、`/api/pair` 路由族与 `/api/update` 面板；浏览器半区渲染侧边栏底部入口（下载触发按钮与设置按钮旁的手机图标）、带二维码的配对面板、实时设备状态，以及停止/刷新/复制操作，还渲染探测并执行更新的更新面板。
 
+宿主适配支持 DSH 0.1.1-rc.2 和 0.1.2-rc.1。后者通过公开 Typert Gateway 处理会话历史、流式事件、队列和审批，同时保留现有已配对移动端与 Android 协议。审批回复仍绑定原始会话及请求。适配器复用了 [dsh-browser](https://github.com/Lum1104/dsh-browser/tree/782c61d39cd71394c9901174b09f69cfd4a041ab) 的 MIT 许可传输实现，许可保留在 [src/host/LICENSE.dsh-browser](src/host/LICENSE.dsh-browser)。
+
 ## 功能
 
 ### 社区 relay 与 Android companion

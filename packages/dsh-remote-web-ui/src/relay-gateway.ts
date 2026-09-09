@@ -1,5 +1,6 @@
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
-import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
+import type { RpcId as LegacyRpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
+const RpcId = (value: string) => value as LegacyRpcId
 import { dispatchMobileMethod, isMobileMethodAllowed } from './mobile-api.ts'
 
 const PROTOCOL_VERSION = 1

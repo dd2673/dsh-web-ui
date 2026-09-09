@@ -14,6 +14,8 @@ entries (the download trigger and the phone icon beside the settings button),
 the pairing panel with a QR code, live device status, and stop/refresh/copy
 actions, and the update panel that probes and runs the update.
 
+The Host adapter supports DSH 0.1.1-rc.2 and 0.1.2-rc.1. The latter uses the public Typert Gateway for session history, streaming, queues and approvals while preserving the existing paired mobile/Android wire protocol. Approval replies remain bound to their originating session and request. The adapter incorporates MIT-licensed transport code from [dsh-browser](https://github.com/Lum1104/dsh-browser/tree/782c61d39cd71394c9901174b09f69cfd4a041ab); its license is retained in [src/host/LICENSE.dsh-browser](src/host/LICENSE.dsh-browser).
+
 ## What it does
 
 ### Community relay and Android companion

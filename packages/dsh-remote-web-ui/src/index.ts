@@ -1,3 +1,4 @@
+import { resolveCompatibilityApi } from './host/compat-api.ts'
 /**
  * Mobile remote control for the dsh web GUI — host half. Mounts the pairing
  * service (one-time tokens, device sessions, revocation), the /api/pair
@@ -57,7 +58,7 @@ declare module '@deepseek-ai/cordis' {
 export const name = 'remote-web-ui'
 
 /** Services required before the pairing surfaces can mount. */
-export const inject = ['webServer', 'apiProxy']
+export const inject = ['webServer', 'connection']
 
 /**
  * Settings namespace of the remote-control capability — the section the web
@@ -264,7 +265,7 @@ export function apply(ctx: Context, config?: Config): void {
   let disposeSweep: (() => void) | undefined
   // The phone's data channel: pairing routes + the /m page + the /m/api
   // proxy (which needs the host ApiProxy service; the plugin injects it).
-  const apiProxy = ctx.get('apiProxy')
+  const apiProxy = resolveCompatibilityApi(ctx)
   if (apiProxy === undefined) {
     console.warn('remote-web-ui: apiProxy service unavailable — the mobile data channel is disabled')
   }
